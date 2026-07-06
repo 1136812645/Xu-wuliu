@@ -15,6 +15,8 @@
 
 ## 2. 业务流程图
 
+### 2.1 运单全流程
+
 ```mermaid
 flowchart LR
   A[货主创建运单] --> B{车辆重量/体积校验}
@@ -29,6 +31,40 @@ flowchart LR
   I --> J[签收 幂等拦截]
   J --> K[上传电子回单 幂等拦截]
   K --> L[进入结算与报表统计]
+```
+
+### 2.2 档案预警流程
+
+```mermaid
+flowchart TD
+  A[定时任务或页面访问触发] --> B[读取司机与车辆档案]
+  B --> C[解析证件到期日]
+  C --> D{日期是否可解析}
+  D -->|否| E[标记 INVALID]
+  D -->|是| F[计算剩余天数 daysRemaining]
+  F --> G{daysRemaining < 0}
+  G -->|是| H[标记 EXPIRED]
+  G -->|否| I{daysRemaining <= 30}
+  I -->|是| J[标记 EXPIRING_SOON]
+  I -->|否| K[不预警]
+  E --> L[返回预警列表]
+  H --> L
+  J --> L
+  K --> L
+```
+
+### 2.3 运费计算流程
+
+```mermaid
+flowchart LR
+  A[输入草稿: 里程 车型 补贴 扣款] --> B[匹配运价规则]
+  B --> C[计算干线运费: mileage x unitPrice]
+  C --> D[计算装卸费: rule.loadingFee + extraLoadingFee]
+  D --> E[计算保险费: lineHaul x insuranceRate]
+  E --> F[写入补贴与扣款项]
+  F --> G[汇总 totalAmount]
+  G --> H[生成费用明细 fees[]]
+  H --> I[返回总价与分项公式快照]
 ```
 
 ## 3. 架构图
@@ -405,10 +441,25 @@ Google 登录流程：
 ### 10.4 日志留存
 
 - API 关键链路日志按天写入 `apps/api/logs/api-YYYY-MM-DD.log`
+
+## 11. 文档与代码对应关系
+
+为保证“图文齐全且能对应代码实现”，关键设计与代码映射如下：
+
+- 运单全流程图 -> `apps/api/src/index.ts`（开单/签收/回单接口）、`apps/api/src/logic.ts`（状态流转）
+- 档案预警流程图 -> `apps/api/src/logic.ts` 中 `buildDocumentWarnings`
+- 运费计算流程图 -> `apps/api/src/logic.ts` 中 `calculateFees`
+- ER 图与实体关系 -> `db/init/01_schema.sql`
+- 分表方案 -> `apps/api/src/logic.ts` 中 `resolveShardTable`，`apps/api/src/waybill-repository.ts`
+- MQ 架构 -> `apps/api/src/mq.ts`，`apps/api/src/index.ts` 的 MQ 状态与补偿接口
+- 幂等方案 -> `apps/api/src/index.ts` + `apps/api/src/redis-cache.ts`（`idem:{key}`）
+- 分布式锁 -> `apps/api/src/redis-lock.ts` + `apps/api/src/index.ts`
+- 缓存方案 -> `apps/api/src/redis-cache.ts` + `apps/api/src/index.ts`
+- 部署方案 -> `docker-compose.yml` + `infra/nginx/gateway.conf`
 - 日志字段统一为 JSON line，支持按 `message/context` 检索
 - 覆盖事件：请求入口、建单、签收、回单、规则重载、MQ/DB 异常
 
-## 11. 当前代码实现与扩展边界
+## 12. 当前代码实现与扩展边界
 
 当前仓库提供的是可运行演示版：
 
