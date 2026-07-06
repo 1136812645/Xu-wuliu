@@ -277,6 +277,14 @@ Redis 使用场景：
 - `GET /api/bootstrap`、`GET /api/dashboard`、`GET /api/waybills` 响应头返回 `x-cache-hit`（1=命中，0=未命中）
 - `GET /api/cache/status` 返回关键缓存键是否存在
 - 任意写接口（开单/签收/回单）成功后，主动失效 `cache:dashboard:v1` 与 `cache:waybills:recent:50`
+- 档案详情缓存接口：
+  - `GET /api/archives/shippers/:id` -> `shipper:detail:{id}`（TTL 30min）
+  - `GET /api/archives/carriers/:id` -> `carrier:detail:{id}`（TTL 30min）
+  - `GET /api/archives/vehicles/:id` -> `vehicle:detail:{id}`（TTL 30min）
+- 档案新增/修改接口（当前为内存示例）会主动失效对应详情缓存与 `cache:bootstrap:v1`：
+  - `POST/PUT /api/archives/shippers...`
+  - `POST/PUT /api/archives/carriers...`
+  - `POST/PUT /api/archives/vehicles...`
 
 ## 7. 索引设计
 

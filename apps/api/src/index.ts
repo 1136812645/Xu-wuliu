@@ -24,7 +24,7 @@ import {
   publishWaybillEvent,
   startWaybillConsumer,
 } from './mq.js';
-import { idempotencyStore, vehicles, waybills } from './data.js';
+import { carriers, idempotencyStore, shippers, vehicles, waybills } from './data.js';
 import {
   createWaybillInDb,
   listPricingRulesFromDb,
@@ -87,6 +87,22 @@ const pricingRuleSchema = z.object({
   loadingFee: z.number(),
   insuranceRate: z.number().min(0),
   index: z.number().int().min(0).optional(),
+});
+
+const partyProfileSchema = z.object({
+  code: z.string().min(1),
+  name: z.string().min(1),
+  contactName: z.string().min(1),
+  phone: z.string().min(1),
+});
+
+const vehicleProfileSchema = z.object({
+  plateNumber: z.string().min(1),
+  truckType: z.enum(['4.2M', '6.8M', '9.6M', '17.5M']),
+  maxWeightKg: z.number().min(0),
+  maxVolumeM3: z.number().min(0),
+  roadPermitExpiry: z.string().min(1),
+  assignedDriverId: z.string().min(1),
 });
 
 function getIdempotencyKey(req: express.Request): string | undefined {
@@ -256,6 +272,177 @@ async function invalidateHotCaches(): Promise<void> {
     cacheDelete('cache:waybills:recent:50'),
   ]);
 }
+
+async function invalidateArchiveCaches(keys: string[]): Promise<void> {
+  const toDelete = [...keys, 'cache:bootstrap:v1'];
+  await Promise.all(toDelete.map((key) => cacheDelete(key)));
+}
+
+function buildArchiveId(prefix: string): string {
+  return `${prefix}-${Date.now().toString(36)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+}
+
+app.get('/api/archives/shippers/:id', (req, res) => {
+  const cacheKey = `shipper:detail:${req.params.id}`;
+  void rememberJson(cacheKey, 30 * 60, () => {
+    const item = shippers.find((row) => row.id === req.params.id);
+    if (!item) {
+      throw new Error('Shipper not found.');
+    }
+    return item;
+  })
+    .then(({ value, hit }) => {
+      res.setHeader('x-cache-hit', hit ? '1' : '0');
+      res.json(value);
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const status = message === 'Shipper not found.' ? 404 : 500;
+      res.status(status).json({ message });
+    });
+});
+
+app.get('/api/archives/carriers/:id', (req, res) => {
+  const cacheKey = `carrier:detail:${req.params.id}`;
+  void rememberJson(cacheKey, 30 * 60, () => {
+    const item = carriers.find((row) => row.id === req.params.id);
+    if (!item) {
+      throw new Error('Carrier not found.');
+    }
+    return item;
+  })
+    .then(({ value, hit }) => {
+      res.setHeader('x-cache-hit', hit ? '1' : '0');
+      res.json(value);
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const status = message === 'Carrier not found.' ? 404 : 500;
+      res.status(status).json({ message });
+    });
+});
+
+app.get('/api/archives/vehicles/:id', (req, res) => {
+  const cacheKey = `vehicle:detail:${req.params.id}`;
+  void rememberJson(cacheKey, 30 * 60, () => {
+    const item = vehicles.find((row) => row.id === req.params.id);
+    if (!item) {
+      throw new Error('Vehicle not found.');
+    }
+    return item;
+  })
+    .then(({ value, hit }) => {
+      res.setHeader('x-cache-hit', hit ? '1' : '0');
+      res.json(value);
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      const status = message === 'Vehicle not found.' ? 404 : 500;
+      res.status(status).json({ message });
+    });
+});
+
+app.post('/api/archives/shippers', async (req, res) => {
+  const parsed = partyProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid shipper payload.', issues: parsed.error.issues });
+  }
+
+  const newItem = {
+    id: buildArchiveId('shipper'),
+    ...parsed.data,
+  };
+  shippers.push(newItem);
+  await invalidateArchiveCaches([`shipper:detail:${newItem.id}`]);
+  return res.status(201).json(newItem);
+});
+
+app.put('/api/archives/shippers/:id', async (req, res) => {
+  const parsed = partyProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid shipper payload.', issues: parsed.error.issues });
+  }
+
+  const index = shippers.findIndex((item) => item.id === req.params.id);
+  if (index < 0) {
+    return res.status(404).json({ message: 'Shipper not found.' });
+  }
+
+  shippers[index] = {
+    ...shippers[index],
+    ...parsed.data,
+  };
+  await invalidateArchiveCaches([`shipper:detail:${req.params.id}`]);
+  return res.json(shippers[index]);
+});
+
+app.post('/api/archives/carriers', async (req, res) => {
+  const parsed = partyProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid carrier payload.', issues: parsed.error.issues });
+  }
+
+  const newItem = {
+    id: buildArchiveId('carrier'),
+    ...parsed.data,
+  };
+  carriers.push(newItem);
+  await invalidateArchiveCaches([`carrier:detail:${newItem.id}`]);
+  return res.status(201).json(newItem);
+});
+
+app.put('/api/archives/carriers/:id', async (req, res) => {
+  const parsed = partyProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid carrier payload.', issues: parsed.error.issues });
+  }
+
+  const index = carriers.findIndex((item) => item.id === req.params.id);
+  if (index < 0) {
+    return res.status(404).json({ message: 'Carrier not found.' });
+  }
+
+  carriers[index] = {
+    ...carriers[index],
+    ...parsed.data,
+  };
+  await invalidateArchiveCaches([`carrier:detail:${req.params.id}`]);
+  return res.json(carriers[index]);
+});
+
+app.post('/api/archives/vehicles', async (req, res) => {
+  const parsed = vehicleProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid vehicle payload.', issues: parsed.error.issues });
+  }
+
+  const newItem = {
+    id: buildArchiveId('vehicle'),
+    ...parsed.data,
+  };
+  vehicles.push(newItem);
+  await invalidateArchiveCaches([`vehicle:detail:${newItem.id}`]);
+  return res.status(201).json(newItem);
+});
+
+app.put('/api/archives/vehicles/:id', async (req, res) => {
+  const parsed = vehicleProfileSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid vehicle payload.', issues: parsed.error.issues });
+  }
+
+  const index = vehicles.findIndex((item) => item.id === req.params.id);
+  if (index < 0) {
+    return res.status(404).json({ message: 'Vehicle not found.' });
+  }
+
+  vehicles[index] = {
+    ...vehicles[index],
+    ...parsed.data,
+  };
+  await invalidateArchiveCaches([`vehicle:detail:${req.params.id}`]);
+  return res.json(vehicles[index]);
+});
 
 app.post('/api/waybills/quote', (req, res) => {
   const parsed = waybillDraftSchema.safeParse(req.body);
