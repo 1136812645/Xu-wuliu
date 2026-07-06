@@ -621,10 +621,12 @@ app.post('/api/waybills/:id/sign', async (req, res) => {
 
     await invalidateHotCaches();
     await setIdempotencySnapshot(idempotencyKey, waybill);
-    logger.info('waybill.signed', {
-      idempotencyKey,
-      waybillNo: waybill.waybillNo,
-    });
+    if (shouldPublish) {
+      logger.info('waybill.signed', {
+        idempotencyKey,
+        waybillNo: waybill.waybillNo,
+      });
+    }
 
     if (wasSignedOrDone) {
       return res.status(200).json({
@@ -686,10 +688,12 @@ app.post('/api/waybills/:id/upload-pod', async (req, res) => {
 
     await invalidateHotCaches();
     await setIdempotencySnapshot(idempotencyKey, waybill);
-    logger.info('waybill.pod_uploaded', {
-      idempotencyKey,
-      waybillNo: waybill.waybillNo,
-    });
+    if (shouldPublish) {
+      logger.info('waybill.pod_uploaded', {
+        idempotencyKey,
+        waybillNo: waybill.waybillNo,
+      });
+    }
 
     if (wasPodUploaded) {
       return res.status(200).json({
