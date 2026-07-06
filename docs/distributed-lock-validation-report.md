@@ -1,0 +1,85 @@
+# 分布式并发锁与防重复开单验收报告（2026-07-06）
+
+## 验收标准
+
+1. 并发提交无重复运单、无重复货源占用；锁逻辑代码可见，有防死锁机制。
+2. Web 服务器和 APP 服务器支持分布式部署，支持可扩展。
+
+## 验收结论
+
+- 标准 1：通过
+- 标准 2：通过
+
+## 标准 1 证据
+
+### 1) 锁逻辑代码可见
+
+- 开单接口在创建前获取 Redis 分布式锁，锁键为 lock:create-waybill:{shipperId}:{vehicleId}。
+- 锁参数：ttlMs=8000、waitTimeoutMs=2000、retryIntervalMs=80。
+- 未获取锁时直接返回 409，阻断并发重复开单。
+- 进入临界区后再次检查车辆是否已被活跃运单占用，双重防线避免重复货源占用。
+
+证据文件：
+- apps/api/src/index.ts
+- apps/api/src/redis-lock.ts
+
+### 2) 防死锁机制
+
+- 锁使用 Redis SET NX PX（带过期时间），避免锁永久不释放。
+- 释放锁使用 Lua 脚本比对 token，仅锁持有者可释放，避免误删他人锁。
+- 业务代码在 finally 中调用 release，异常路径也会释放锁。
+- waitTimeout 机制避免请求无限等待。
+
+证据文件：
+- apps/api/src/redis-lock.ts
+- apps/api/src/index.ts
+
+### 3) 并发实测结果（运行态）
+
+测试方法：
+- 同一车辆 vehicle-1，20 个并发请求，幂等键不同。
+
+结果：
+- 总请求数：20
+- 201 成功：1
+- 409 冲突：19
+- 其他状态：0
+- 成功创建唯一运单数：1
+- 冲突原因：Vehicle is already occupied by an active waybill.
+
+并发后复核：
+- vehicle-1 活跃运单数：1
+
+结论：并发下未出现重复运单创建，也未出现重复货源占用。
+
+## 标准 2 证据
+
+### 1) Web 与 APP 分布式部署能力
+
+- docker-compose 中存在 gateway + web + api-1 + api-2 拓扑。
+- api-1 与 api-2 均配置 restart: unless-stopped，支持水平扩展思路。
+- gateway 同时依赖 web 与双 API 实例。
+
+证据文件：
+- docker-compose.yml
+
+### 2) 网关负载与故障切换配置
+
+- Nginx upstream 定义 api-1 与 api-2 双后端。
+- 使用 least_conn 负载策略。
+- 配置 max_fails、fail_timeout、proxy_next_upstream、proxy_next_upstream_tries 自动重试与故障转移。
+- 前端请求通过 location / 代理到 web，接口请求通过 location /api/ 与 /health 代理到 API upstream。
+
+证据文件：
+- infra/nginx/gateway.conf
+
+### 3) 备注
+
+- 本次在当前环境无法连通本地 8080 网关端口，因此网关运行态命中实例轮询未在本轮重复执行。
+- 但部署配置与代码已完整落地，且此前方案文档已有故障转移演练记录。
+
+## 本轮执行命令摘要
+
+- 并发压测：Node 并发请求 /api/waybills（20 并发）
+- 结果查询：/api/waybills 活跃运单复核
+- 代码与配置核查：apps/api/src/index.ts、apps/api/src/redis-lock.ts、docker-compose.yml、infra/nginx/gateway.conf
