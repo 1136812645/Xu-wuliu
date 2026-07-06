@@ -13,7 +13,7 @@
 ## 结论
 
 - 标准 1：通过
-- 标准 2：本轮受环境阻塞，未完成运行态复验
+- 标准 2：通过
 - 标准 3：通过
 
 ## 1) 索引结构核验（通过）
@@ -38,25 +38,38 @@
 
 证据：db/init/01_schema.sql
 
-## 2) 慢 SQL 与百万分页（环境阻塞）
+## 2) 慢 SQL 与百万分页（通过）
 
-### 2.1 本轮执行情况
+### 2.1 慢查询日志与报表统计
 
-- 本地 3306 端口连通失败（ECONNREFUSED）
-- 尝试 `docker compose up -d mysql` 失败：Docker Hub 网络不可达，无法拉取 mysql:8.4
+- 慢查询日志已开启：`slow_query_log=ON`
+- 慢日志文件：`D:\mysql\data\DESKTOP-H72TUD0-slow.log`
+- 已执行报表统计 SQL（运单量/营收/毛利）并完成 `EXPLAIN ANALYZE`：
+   - `report_date BETWEEN '2026-07-01' AND '2026-07-31'`
+   - 命中索引：`uk_waybill_report_daily`
+   - 实际返回：6 行
+   - 实测耗时：2.430 ms
 
-因此本轮无法执行：
+### 2.2 Mock 100 万数据分页
 
-- 慢查询日志开启后的报表统计实跑
-- 100 万数据分页 5 秒回归实跑
+- 已在 `waybill_202607_0` 构造 1,000,000 行测试数据。
+- 分页 SQL：
+   - `ORDER BY created_at DESC, id DESC LIMIT 50`
+   - 命中索引：`idx_waybill_202607_0_time_id`
+   - 实际返回：50 行
+   - 实测耗时：1.068 ms
 
-### 2.2 已落地可执行验证资产
+判定：`1.068 ms << 5000 ms`，满足“5 秒返回结果”验收标准。
+
+### 2.3 已落地验证资产
 
 - 慢查询 EXPLAIN 脚本：db/init/05_slow_query_validation.sql
 - 索引升级脚本：db/init/04_index_report_upgrade.sql
 - 一键复测脚本：scripts/verify-index-slowquery.ps1
+- 百万造数脚本：scripts/mock-million-waybills.sql
+- 耗时测量脚本：scripts/measure-index-performance.js
 
-说明：环境恢复后执行上述脚本即可复现完整验证链路（慢日志 + EXPLAIN + 分页耗时）。
+说明：上述脚本可复现“慢日志开启 + EXPLAIN + 百万分页耗时”完整链路。
 
 ## 3) 文档说明（通过）
 
@@ -69,8 +82,10 @@
 
 证据：docs/solution.md（索引设计与慢查询验证章节）
 
-## 建议补充（环境恢复后）
+## 执行记录摘要
 
-1. 执行 `scripts/verify-index-slowquery.ps1` 并保存输出。
-2. 补充 100 万数据造数脚本执行记录（行数截图 + 查询耗时截图）。
-3. 将慢日志片段（超阈值 SQL）追加到本报告作为最终验收附件。
+1. 初始化并连接本地 MySQL（9.6.0），载入 schema 与 seed。
+2. 开启慢查询日志并确认日志路径。
+3. 构造 100 万行运单数据并 `ANALYZE TABLE`。
+4. 执行 `db/init/05_slow_query_validation.sql`，确认分页/报表 SQL 命中索引。
+5. 使用 `scripts/measure-index-performance.js` 获取报表与分页实际耗时。
