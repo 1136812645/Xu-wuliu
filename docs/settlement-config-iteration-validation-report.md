@@ -1,0 +1,72 @@
+# 结算规则微调快速迭代验收报告（2026-07-06）
+
+## 验收项
+
+验证 5：结算规则微调可快速迭代。
+
+场景：临时修改阶梯运价、新增装卸费项、新增扣款类型。
+
+验收标准：
+
+1. 不改动核心计算主流程，仅修改配置表/配置参数即可生效；
+2. 修改配置后，新建运单自动使用新结算规则，无需大面积改代码；
+3. 文档明确说明结算逻辑与业务配置解耦设计。
+
+## 结论
+
+- 标准 1：通过
+- 标准 2：通过
+- 标准 3：通过
+- 最终判定：通过
+
+## 设计核验
+
+1) 结算主流程集中在 `calculateFees`，流程固定：
+- LINE_HAUL（里程 x 单价）
+- LOADING（基础装卸 + 临时装卸）
+- INSURANCE（干线 x 费率）
+- SUBSIDY
+- DEDUCTION
+- 汇总 total
+
+2) 配置驱动点：
+- 阶梯运价：`pricing_rule` / `POST /api/pricing-rules`
+- 结算附加规则（新增装卸费项/扣款类型）：`POST /api/settlement-adjustments`
+
+3) 解耦特征：
+- 新增业务项通过规则元数据（code/label/category/mode/value/enabled/scope）解释执行；
+- 未改写核心结算主流程的分支骨架，仅扩展配置解释层。
+
+## 实测闭环（配置改动 -> 自动生效）
+
+证据轨迹：
+- `docs/logs/settlement-config-iteration.trace.md`
+
+关键结果：
+
+- baseline：`total=2921.92, lineHaul=2660, loading=230, deduction=0`
+- 调整阶梯运价（7.6 -> 8.1）后：`total=3099.02, lineHaul=2835`
+- 新增装卸费项（+30）后：`total=3129.02, loading=260`
+- 新增扣款类型（-20）后：`total=3109.02, deduction=-20`
+- 新建运单（同参数）自动命中新规则：
+  - `created.total=3109.02`
+  - `created.lineHaul=2835`
+  - `created.loading=260`
+  - `created.deduction=-20`
+
+说明：新建运单金额与最新 quote 保持一致，证明配置改动可直接驱动结算结果，无需修改主流程。
+
+## 回归验证
+
+- `npm run check --workspace @waybill/api`：通过
+- `npm run test --workspace @waybill/api`：通过（11/11）
+
+## 变更文件
+
+- `apps/api/src/domain.ts`
+- `apps/api/src/data.ts`
+- `apps/api/src/logic.ts`
+- `apps/api/src/index.ts`
+- `apps/api/src/logic.test.ts`
+- `docs/solution.md`
+- `docs/logs/settlement-config-iteration.trace.md`

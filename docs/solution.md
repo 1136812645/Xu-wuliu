@@ -186,6 +186,20 @@ $$
 - 结算规则放入配置表，不把规则写死在核心流程中
 - 运行态支持规则微调接口：`GET /api/pricing-rules`、`POST /api/pricing-rules`、`POST /api/pricing-rules/reload`
 
+结算逻辑与业务配置解耦：
+
+- 核心计算主流程固定为：`lineHaul -> loading -> insurance -> subsidy -> deduction -> total`，由 `calculateFees` 统一编排；
+- 阶梯运价通过 `pricing_rule`（或内存规则镜像）驱动，不在主流程中写死 shipper/车型/区间分支；
+- 业务临时项（新增装卸费项、新增扣款类型）通过配置化结算附加规则驱动：`GET /api/settlement-adjustments`、`POST /api/settlement-adjustments`；
+- 计算引擎仅按规则元数据解释执行（类别/模式/值/启用状态/适用范围），新增业务项不需要改计算主流程代码。
+
+微调生效示例（验收实测）：
+
+- 调整 301-2000km 单价：`7.6 -> 8.1` 后，quote 干线费用自动更新（2660 -> 2835）；
+- 新增装卸附加项（固定 +30）后，loading 汇总自动变化（230 -> 260）；
+- 新增扣款类型（固定 -20）后，deduction 汇总自动变化（0 -> -20）；
+- 新建运单自动继承最新规则，总价与 quote 保持一致（无需改核心计算主流程）。
+
 ### 5.2 运单容量校验
 
 规则：重量和体积双约束，任一超标即拦截。

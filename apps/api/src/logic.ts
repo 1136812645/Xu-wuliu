@@ -3,6 +3,7 @@ import {
   drivers,
   idempotencyStore,
   pricingRules,
+  settlementAdjustmentRules,
   shippers,
   vehicles,
   waybills,
@@ -13,6 +14,7 @@ import type {
   FeeCalculationResult,
   FeeComponent,
   PricingRule,
+  SettlementAdjustmentRule,
   VehicleProfile,
   WaybillDraft,
   WaybillRecord,
@@ -112,6 +114,19 @@ function normalizeRule(rule: PricingRule): PricingRule {
   };
 }
 
+function normalizeSettlementAdjustmentRule(rule: SettlementAdjustmentRule): SettlementAdjustmentRule {
+  return {
+    code: rule.code.trim(),
+    label: rule.label.trim(),
+    category: rule.category,
+    mode: rule.mode,
+    value: Number(rule.value),
+    enabled: Boolean(rule.enabled),
+    shipperId: rule.shipperId?.trim() || undefined,
+    truckType: rule.truckType,
+  };
+}
+
 export function listPricingRules(): PricingRule[] {
   return pricingRules.map((rule) => ({ ...rule }));
 }
@@ -131,6 +146,64 @@ export function upsertPricingRule(rule: PricingRule, index?: number): PricingRul
   }
   pricingRules.push(normalized);
   return listPricingRules();
+}
+
+export function listSettlementAdjustmentRules(): SettlementAdjustmentRule[] {
+  return settlementAdjustmentRules.map((rule) => ({ ...rule }));
+}
+
+export function replaceSettlementAdjustmentRules(nextRules: SettlementAdjustmentRule[]): void {
+  settlementAdjustmentRules.length = 0;
+  for (const rule of nextRules) {
+    settlementAdjustmentRules.push(normalizeSettlementAdjustmentRule(rule));
+  }
+}
+
+export function upsertSettlementAdjustmentRule(rule: SettlementAdjustmentRule, index?: number): SettlementAdjustmentRule[] {
+  const normalized = normalizeSettlementAdjustmentRule(rule);
+  if (!normalized.code) {
+    throw new Error('Adjustment rule code is required.');
+  }
+  if (!normalized.label) {
+    throw new Error('Adjustment rule label is required.');
+  }
+  if (!Number.isFinite(normalized.value) || normalized.value < 0) {
+    throw new Error('Adjustment rule value must be greater than or equal to zero.');
+  }
+
+  if (typeof index === 'number' && index >= 0 && index < settlementAdjustmentRules.length) {
+    settlementAdjustmentRules[index] = normalized;
+    return listSettlementAdjustmentRules();
+  }
+
+  const existing = settlementAdjustmentRules.findIndex((item) => item.code === normalized.code);
+  if (existing >= 0) {
+    settlementAdjustmentRules[existing] = normalized;
+    return listSettlementAdjustmentRules();
+  }
+
+  settlementAdjustmentRules.push(normalized);
+  return listSettlementAdjustmentRules();
+}
+
+function resolveAdjustmentAmount(rule: SettlementAdjustmentRule, lineHaul: number): number {
+  if (rule.mode === 'LINE_HAUL_RATE') {
+    return roundCurrency(lineHaul * rule.value);
+  }
+  return roundCurrency(rule.value);
+}
+
+function shouldApplyAdjustmentRule(rule: SettlementAdjustmentRule, draft: WaybillDraft, vehicle: VehicleProfile): boolean {
+  if (!rule.enabled) {
+    return false;
+  }
+  if (rule.shipperId && rule.shipperId !== draft.shipperId) {
+    return false;
+  }
+  if (rule.truckType && rule.truckType !== vehicle.truckType) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -202,13 +275,6 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
 
   const fees: FeeComponent[] = [
     {
-/**
- * Transition one waybill status with action-level idempotency protection.
- * @param waybillId in-memory waybill id.
- * @param action allowed actions: SIGN or UPLOAD_POD.
- * @param idempotencyKey optional client key, falls back to waybillId:action when missing.
- * @returns latest waybill state after transition.
- */
       type: 'LINE_HAUL',
       label: '干线运费 / Line haul',
       amount: lineHaul,
@@ -239,6 +305,30 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
       formula: `${draft.deduction} x -1`,
     },
   ];
+
+  // Settlement adjustments are config-driven so fee tweaks do not require core flow rewrites.
+  for (const item of settlementAdjustmentRules) {
+    if (!shouldApplyAdjustmentRule(item, draft, vehicle)) {
+      continue;
+    }
+    const amount = resolveAdjustmentAmount(item, lineHaul);
+    if (item.category === 'LOADING') {
+      fees.push({
+        type: 'LOADING',
+        label: `${item.label} / ${item.code}`,
+        amount,
+        formula: item.mode === 'LINE_HAUL_RATE' ? `${lineHaul} x ${item.value}` : `${item.value}`,
+      });
+      continue;
+    }
+
+    fees.push({
+      type: 'DEDUCTION',
+      label: `${item.label} / ${item.code}`,
+      amount: roundCurrency(amount * -1),
+      formula: item.mode === 'LINE_HAUL_RATE' ? `${lineHaul} x ${item.value} x -1` : `${item.value} x -1`,
+    });
+  }
 
   const totalAmount = roundCurrency(fees.reduce((sum, item) => sum + item.amount, 0));
   const waybillNo = `WB${Date.now().toString().slice(-8)}`;

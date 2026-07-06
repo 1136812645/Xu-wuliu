@@ -9,10 +9,12 @@ import {
   createWaybill,
   getReferenceData,
   getRolePermissions,
+  listSettlementAdjustmentRules,
   getStatusFlow,
   listPricingRules,
   seedDemoWaybills,
   transitionWaybill,
+  upsertSettlementAdjustmentRule,
   upsertPricingRule,
   validateCapacity,
 } from './logic.js';
@@ -86,6 +88,18 @@ const pricingRuleSchema = z.object({
   unitPricePerKm: z.number().min(0),
   loadingFee: z.number(),
   insuranceRate: z.number().min(0),
+  index: z.number().int().min(0).optional(),
+});
+
+const settlementAdjustmentRuleSchema = z.object({
+  code: z.string().min(1),
+  label: z.string().min(1),
+  category: z.enum(['LOADING', 'DEDUCTION']),
+  mode: z.enum(['FIXED', 'LINE_HAUL_RATE']),
+  value: z.number().min(0),
+  enabled: z.boolean().default(true),
+  shipperId: z.string().min(1).optional(),
+  truckType: z.enum(['4.2M', '6.8M', '9.6M', '17.5M']).optional(),
   index: z.number().int().min(0).optional(),
 });
 
@@ -733,4 +747,23 @@ app.listen(port, () => {
     logger.warn('db.unavailable_fallback_memory', {});
   });
   void startWaybillConsumer();
+});
+
+app.get('/api/settlement-adjustments', (_req, res) => {
+  return res.json({ source: 'memory', items: listSettlementAdjustmentRules() });
+});
+
+app.post('/api/settlement-adjustments', (req, res) => {
+  const parsed = settlementAdjustmentRuleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid settlement adjustment payload.', issues: parsed.error.issues });
+  }
+
+  const { index, ...rule } = parsed.data;
+  try {
+    const items = upsertSettlementAdjustmentRule(rule, index);
+    return res.status(201).json({ source: 'memory', count: items.length, items });
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
+  }
 });
