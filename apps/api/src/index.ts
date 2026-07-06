@@ -397,7 +397,12 @@ app.post('/api/waybills/:id/sign', async (req, res) => {
 
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
-    return res.status(200).json(idemSnapshot);
+    return res.status(200).json({
+      idempotentBlocked: true,
+      reason: 'IDEMPOTENCY_KEY_HIT',
+      message: 'Duplicate SIGN request was blocked by idempotency key.',
+      data: idemSnapshot,
+    });
   }
 
   try {
@@ -432,6 +437,16 @@ app.post('/api/waybills/:id/sign', async (req, res) => {
       idempotencyKey,
       waybillNo: waybill.waybillNo,
     });
+
+    if (wasSignedOrDone) {
+      return res.status(200).json({
+        idempotentBlocked: true,
+        reason: 'ALREADY_SIGNED',
+        message: 'Duplicate SIGN operation was ignored because waybill is already signed.',
+        data: waybill,
+      });
+    }
+
     return res.json(waybill);
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
@@ -446,7 +461,12 @@ app.post('/api/waybills/:id/upload-pod', async (req, res) => {
 
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
-    return res.status(200).json(idemSnapshot);
+    return res.status(200).json({
+      idempotentBlocked: true,
+      reason: 'IDEMPOTENCY_KEY_HIT',
+      message: 'Duplicate UPLOAD_POD request was blocked by idempotency key.',
+      data: idemSnapshot,
+    });
   }
 
   try {
@@ -481,6 +501,16 @@ app.post('/api/waybills/:id/upload-pod', async (req, res) => {
       idempotencyKey,
       waybillNo: waybill.waybillNo,
     });
+
+    if (wasPodUploaded) {
+      return res.status(200).json({
+        idempotentBlocked: true,
+        reason: 'ALREADY_POD_UPLOADED',
+        message: 'Duplicate UPLOAD_POD operation was ignored because POD is already uploaded.',
+        data: waybill,
+      });
+    }
+
     return res.json(waybill);
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
