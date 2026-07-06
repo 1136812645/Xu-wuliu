@@ -149,3 +149,16 @@ Redis 缓存观测接口：
 
 - API 运行日志按天写入 `apps/api/logs/api-YYYY-MM-DD.log`
 - 日志包含请求、建单、签收、回单、规则重载、MQ/DB异常等关键事件
+
+批量导入（10k）流式压测：
+
+- 启动 API（建议 DB 模式）：`npm run dev:api`
+- 执行流式导入压测：`npx tsx scripts/perf-import-10k-stream.ts`
+- 可调参数：
+  - `IMPORT_TOTAL`（默认 10000）
+  - `IMPORT_CHUNK_SIZE`（默认 200）
+  - `IMPORT_API_BASE`（默认 `http://127.0.0.1:3100`）
+- 脚本特性：
+  - 先生成 CSV 模板（Excel 可直接打开）
+  - 按行流式读取（readline）
+  - 按 chunk 调用后台导入接口分批入库，不一次性全量加载内存

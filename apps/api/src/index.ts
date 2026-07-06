@@ -80,6 +80,15 @@ const waybillDraftSchema = z.object({
   deduction: z.number(),
 });
 
+const importWaybillRowSchema = waybillDraftSchema.extend({
+  idempotencyKey: z.string().min(1).optional(),
+});
+
+const importChunkSchema = z.object({
+  importBatchId: z.string().min(1).optional(),
+  rows: z.array(importWaybillRowSchema).min(1).max(1000),
+});
+
 const pricingRuleSchema = z.object({
   shipperId: z.string().min(1),
   truckType: z.enum(['4.2M', '6.8M', '9.6M', '17.5M']),
@@ -766,4 +775,57 @@ app.post('/api/settlement-adjustments', (req, res) => {
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
   }
+});
+
+app.post('/api/waybills/import/chunk', async (req, res) => {
+  const parsed = importChunkSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ message: 'Invalid import chunk payload.', issues: parsed.error.issues });
+  }
+
+  const start = Date.now();
+  const heapBeforeMB = Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 100) / 100;
+
+  const importBatchId = parsed.data.importBatchId ?? `import-${Date.now().toString(36)}`;
+  let created = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (let i = 0; i < parsed.data.rows.length; i += 1) {
+    const item = parsed.data.rows[i];
+    const idempotencyKey = item.idempotencyKey ?? `${importBatchId}:${i + 1}`;
+    try {
+      if (isDbEnabled()) {
+        await createWaybillInDb(item, idempotencyKey);
+      } else {
+        createWaybill(item, idempotencyKey);
+      }
+      created += 1;
+    } catch (error) {
+      failed += 1;
+      if (errors.length < 5) {
+        errors.push(error instanceof Error ? error.message : 'Unknown error');
+      }
+    }
+  }
+
+  if (created > 0) {
+    await invalidateHotCaches();
+  }
+
+  const heapAfterMB = Math.round((process.memoryUsage().heapUsed / 1024 / 1024) * 100) / 100;
+  const durationMs = Date.now() - start;
+
+  return res.json({
+    importBatchId,
+    chunkSize: parsed.data.rows.length,
+    created,
+    failed,
+    errors,
+    durationMs,
+    heapBeforeMB,
+    heapAfterMB,
+    heapDeltaMB: Math.round((heapAfterMB - heapBeforeMB) * 100) / 100,
+    storage: isDbEnabled() ? 'mysql-sharded' : 'memory',
+  });
 });
