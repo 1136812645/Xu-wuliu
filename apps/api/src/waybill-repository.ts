@@ -80,6 +80,13 @@ function monthFromDate(date: Date): string {
   return `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}`;
 }
 
+/**
+ * Route one waybill number to a physical shard table.
+ * @param waybillNo waybill business number.
+ * @param now current create time.
+ * @param shardCount route config shard count.
+ * @returns safe shard table name.
+ */
 function routeTable(waybillNo: string, now: Date, shardCount: number): string {
   return safeShardTable(resolveShardTable(waybillNo, now, shardCount));
 }
@@ -163,9 +170,16 @@ async function loadWaybillByNo(waybillNo: string, tableHints: string[]): Promise
 
 async function listShardTablesByMonth(month: string): Promise<string[]> {
   const shardCount = await getShardCount(month);
+  // Expand to concrete physical tables for cross-shard reads in current month.
   return Array.from({ length: shardCount }, (_, i) => safeShardTable(`waybill_${month}_${i}`));
 }
 
+/**
+ * Create one waybill in DB with transactional idempotency and fee snapshots.
+ * @param draft waybill draft payload.
+ * @param idempotencyKey optional client idempotency key.
+ * @returns created or previously created waybill record.
+ */
 export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: string): Promise<WaybillRecord> {
   const feeResult = calculateFees(draft);
   const now = new Date();
@@ -255,6 +269,11 @@ export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: st
   });
 }
 
+/**
+ * List recent waybills across all monthly shards.
+ * @param limit max rows to return.
+ * @returns merged recent waybill records sorted by created_at desc.
+ */
 export async function listRecentWaybillsFromDb(limit = 50): Promise<WaybillRecord[]> {
   const month = monthFromDate(new Date());
   const tables = await listShardTablesByMonth(month);
@@ -283,6 +302,13 @@ export async function listRecentWaybillsFromDb(limit = 50): Promise<WaybillRecor
   return rows.map((row) => mapRowToWaybill(row, feeMap.get(row.waybill_no) ?? []));
 }
 
+/**
+ * Transition waybill status in DB with operation-log idempotency.
+ * @param waybillId waybill business id.
+ * @param action SIGN or UPLOAD_POD.
+ * @param idempotencyKey optional client idempotency key.
+ * @returns latest waybill record.
+ */
 export async function transitionWaybillInDb(
   waybillId: string,
   action: 'SIGN' | 'UPLOAD_POD',

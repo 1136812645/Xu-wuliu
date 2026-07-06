@@ -582,6 +582,7 @@ app.post('/api/waybills/:id/sign', async (req, res) => {
     return;
   }
 
+  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
     return res.status(200).json({
@@ -646,6 +647,7 @@ app.post('/api/waybills/:id/upload-pod', async (req, res) => {
     return;
   }
 
+  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
     return res.status(200).json({

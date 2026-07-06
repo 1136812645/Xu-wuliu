@@ -133,11 +133,19 @@ export function upsertPricingRule(rule: PricingRule, index?: number): PricingRul
   return listPricingRules();
 }
 
+/**
+ * Resolve target shard table by waybill number tail hash and month.
+ * @param waybillNo waybill business number used for hash distribution.
+ * @param createdAt waybill creation time used to build yyyyMM shard prefix.
+ * @param shardCount number of physical shards for the month.
+ * @returns physical table name such as waybill_202607_1.
+ */
 export function resolveShardTable(waybillNo: string, createdAt: Date, shardCount = 4): string {
   if (shardCount <= 0) {
     throw new Error('Shard count must be greater than zero.');
   }
   const month = `${createdAt.getFullYear()}${String(createdAt.getMonth() + 1).padStart(2, '0')}`;
+  // Keep routing deterministic: same waybillNo always lands on the same shard under one shardCount.
   const tail = waybillNo.charCodeAt(waybillNo.length - 1) % shardCount;
   return `waybill_${month}_${tail}`;
 }
@@ -157,6 +165,11 @@ export function validateCapacity(draft: WaybillDraft, vehicle: VehicleProfile): 
   };
 }
 
+/**
+ * Calculate fee breakdown and total amount for one waybill draft.
+ * @param draft waybill draft containing mileage, extra fees, subsidy and deduction.
+ * @returns fee components, total amount and routed shard table snapshot.
+ */
 export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
   // Keep pricing validation in one place so quote/create/share identical behavior.
   if (!draft.goodsName.trim()) {
@@ -184,10 +197,18 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
   const loading = roundCurrency(rule.loadingFee + draft.extraLoadingFee);
   const insurance = roundCurrency(lineHaul * rule.insuranceRate);
   const subsidy = roundCurrency(draft.subsidy);
+  // DEDUCTION is stored as negative to make total aggregation and ledger math explicit.
   const deduction = roundCurrency(draft.deduction * -1);
 
   const fees: FeeComponent[] = [
     {
+/**
+ * Transition one waybill status with action-level idempotency protection.
+ * @param waybillId in-memory waybill id.
+ * @param action allowed actions: SIGN or UPLOAD_POD.
+ * @param idempotencyKey optional client key, falls back to waybillId:action when missing.
+ * @returns latest waybill state after transition.
+ */
       type: 'LINE_HAUL',
       label: '干线运费 / Line haul',
       amount: lineHaul,

@@ -129,6 +129,12 @@ async function ensureConnected(): Promise<boolean> {
   }
 }
 
+/**
+ * Persist or update outbox event status for reliable publish replay.
+ * @param event business event payload.
+ * @param publishStatus NEW/FAILED/PUBLISHED state in outbox table.
+ * @param retryCount publish retry times.
+ */
 async function upsertOutboxEvent(event: WaybillEvent, publishStatus: 'NEW' | 'FAILED' | 'PUBLISHED', retryCount: number): Promise<void> {
   if (!isDbEnabled()) {
     return;
@@ -149,6 +155,12 @@ async function upsertOutboxEvent(event: WaybillEvent, publishStatus: 'NEW' | 'FA
 }
 
 async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'CONSUMED' | 'DEAD_LETTER', retryCount: number): Promise<void> {
+/**
+ * Try to insert one inbox row as consumer dedupe guard.
+ * @param event parsed waybill event.
+ * @param payload raw json payload string.
+ * @returns true when event is first seen, false when duplicated.
+ */
   if (!isDbEnabled()) {
     return;
   }
@@ -275,6 +287,10 @@ function parseEvent(message: ConsumeMessage): WaybillEvent {
   return JSON.parse(content) as WaybillEvent;
 }
 
+/**
+ * Consume one message with dedupe, retry and dead-letter handling.
+ * @param message rabbit consume message; null indicates consumer cancelled.
+ */
 async function handleMessage(message: ConsumeMessage | null): Promise<void> {
   if (!message || !consumeChannel) {
     return;
@@ -289,6 +305,7 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
 
     const firstSeen = await tryRecordInboxEvent(event, payload);
     if (!firstSeen) {
+      // Duplicate consumption is acknowledged and skipped to prevent repeated business effects.
       stats.duplicated += 1;
       consumeChannel.ack(message);
       return;
@@ -337,6 +354,11 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
   }
 }
 
+/**
+ * Publish one waybill event with outbox fallback when MQ is unavailable.
+ * @param event waybill business event.
+ * @returns persistedToOutbox=true means event was buffered for retry.
+ */
 export async function publishWaybillEvent(event: WaybillEvent): Promise<{ persistedToOutbox: boolean }> {
   if (isDbEnabled()) {
     try {
@@ -365,6 +387,10 @@ export async function publishWaybillEvent(event: WaybillEvent): Promise<{ persis
   }
 }
 
+/**
+ * Flush in-memory and DB outbox events to MQ.
+ * @returns sent count and remaining buffered count.
+ */
 export async function flushOutbox(): Promise<{ sent: number; remaining: number }> {
   const connected = await ensureConnected();
   if (!connected) {
