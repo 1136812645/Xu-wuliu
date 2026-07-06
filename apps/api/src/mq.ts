@@ -1,4 +1,6 @@
 import amqplib, { type Channel, type ChannelModel, type ConfirmChannel, type ConsumeMessage } from 'amqplib';
+import { type ResultSetHeader, type RowDataPacket } from 'mysql2/promise';
+import { dbQuery, isDbEnabled, withDbConnection } from './db.js';
 import * as logger from './logger.js';
 
 type EventOperation = 'CREATE' | 'SIGN' | 'UPLOAD_POD';
@@ -18,6 +20,12 @@ interface OutboxEvent {
   event: WaybillEvent;
   reason: string;
   createdAt: string;
+}
+
+interface OutboxRow extends RowDataPacket {
+  event_id: string;
+  payload: unknown;
+  retry_count: number;
 }
 
 interface MqStats {
@@ -121,13 +129,103 @@ async function ensureConnected(): Promise<boolean> {
   }
 }
 
-function pushOutbox(event: WaybillEvent, reason: string): void {
-  outbox.push({
-    event,
-    reason,
-    createdAt: new Date().toISOString(),
+async function upsertOutboxEvent(event: WaybillEvent, publishStatus: 'NEW' | 'FAILED' | 'PUBLISHED', retryCount: number): Promise<void> {
+  if (!isDbEnabled()) {
+    return;
+  }
+
+  await withDbConnection(async (conn) => {
+    await conn.query(
+      `INSERT INTO outbox_event (event_id, event_type, business_key, payload, publish_status, retry_count)
+       VALUES (?, 'WAYBILL_STATUS_CHANGED', ?, CAST(? AS JSON), ?, ?)
+       ON DUPLICATE KEY UPDATE
+         payload = VALUES(payload),
+         publish_status = VALUES(publish_status),
+         retry_count = GREATEST(retry_count, VALUES(retry_count)),
+         updated_at = NOW()`,
+      [event.eventId, event.waybillNo, JSON.stringify(event), publishStatus, retryCount],
+    );
   });
+}
+
+async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'CONSUMED' | 'DEAD_LETTER', retryCount: number): Promise<void> {
+  if (!isDbEnabled()) {
+    return;
+  }
+
+  await dbQuery(
+    `UPDATE inbox_event
+     SET consume_status = ?, retry_count = ?, updated_at = NOW()
+     WHERE event_id = ?`,
+    [consumeStatus, retryCount, eventId],
+  );
+}
+
+async function tryRecordInboxEvent(event: WaybillEvent, payload: string): Promise<boolean> {
+  if (!isDbEnabled()) {
+    if (processedEventIds.has(event.eventId)) {
+      return false;
+    }
+    processedEventIds.add(event.eventId);
+    return true;
+  }
+
+  return withDbConnection(async (conn) => {
+    const [result] = await conn.query<ResultSetHeader>(
+      `INSERT IGNORE INTO inbox_event (event_id, event_type, business_key, payload, consume_status, retry_count)
+       VALUES (?, 'WAYBILL_STATUS_CHANGED', ?, CAST(? AS JSON), 'NEW', 0)`,
+      [event.eventId, event.waybillNo, payload],
+    );
+    return result.affectedRows > 0;
+  });
+}
+
+async function loadPendingOutbox(limit = 100): Promise<OutboxRow[]> {
+  if (!isDbEnabled()) {
+    return [];
+  }
+
+  return dbQuery<OutboxRow[]>(
+    `SELECT event_id, payload, retry_count
+     FROM outbox_event
+     WHERE publish_status IN ('NEW', 'FAILED')
+     ORDER BY created_at ASC
+     LIMIT ?`,
+    [limit],
+  );
+}
+
+function normalizeOutboxPayload(payload: unknown): WaybillEvent {
+  if (typeof payload === 'string') {
+    return JSON.parse(payload) as WaybillEvent;
+  }
+  return payload as WaybillEvent;
+}
+
+async function pushOutbox(event: WaybillEvent, reason: string): Promise<{ persistedToDb: boolean }> {
+  let persistedToDb = false;
+  if (isDbEnabled()) {
+    try {
+      await upsertOutboxEvent(event, 'FAILED', 1);
+      persistedToDb = true;
+    } catch (error) {
+      logger.warn('mq.outbox_db_persist_failed', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+
+  if (!persistedToDb) {
+    outbox.push({
+      event,
+      reason,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   stats.publishFailed += 1;
+  return { persistedToDb };
 }
 
 async function publishToExchange(event: WaybillEvent): Promise<void> {
@@ -143,6 +241,16 @@ async function publishToExchange(event: WaybillEvent): Promise<void> {
     timestamp: Date.now(),
   });
   await publishChannel.waitForConfirms();
+  if (isDbEnabled()) {
+    try {
+      await upsertOutboxEvent(event, 'PUBLISHED', 0);
+    } catch (error) {
+      logger.warn('mq.outbox_mark_published_failed', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
   stats.published += 1;
 }
 
@@ -173,34 +281,53 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
   }
 
   try {
-    const event = parseEvent(message);
+    const payload = message.content.toString('utf-8');
+    const event = JSON.parse(payload) as WaybillEvent;
     if (!event.eventId || !event.waybillNo) {
       throw new Error('Invalid event payload.');
     }
 
-    if (processedEventIds.has(event.eventId)) {
+    const firstSeen = await tryRecordInboxEvent(event, payload);
+    if (!firstSeen) {
       stats.duplicated += 1;
       consumeChannel.ack(message);
       return;
     }
 
-    processedEventIds.add(event.eventId);
+    await updateInboxStatus(event.eventId, 'CONSUMED', 0);
     stats.consumed += 1;
     consumeChannel.ack(message);
   } catch (error) {
     const retryCount = Number(message.properties.headers?.['x-retry-count'] ?? 0);
+    const parsed = (() => {
+      try {
+        return parseEvent(message);
+      } catch {
+        return null;
+      }
+    })();
+
     if (retryCount >= 3) {
       // Retry budget exhausted, message will be routed to DLQ for manual replay.
       stats.deadLettered += 1;
+      if (parsed?.eventId) {
+        await updateInboxStatus(parsed.eventId, 'DEAD_LETTER', retryCount);
+      }
       consumeChannel.nack(message, false, false);
       return;
     }
 
     try {
       await routeToRetry(message, retryCount + 1);
+      if (parsed?.eventId) {
+        await updateInboxStatus(parsed.eventId, 'RETRYING', retryCount + 1);
+      }
       consumeChannel.ack(message);
     } catch {
       stats.deadLettered += 1;
+      if (parsed?.eventId) {
+        await updateInboxStatus(parsed.eventId, 'DEAD_LETTER', retryCount + 1);
+      }
       consumeChannel.nack(message, false, false);
     }
 
@@ -211,9 +338,20 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
 }
 
 export async function publishWaybillEvent(event: WaybillEvent): Promise<{ persistedToOutbox: boolean }> {
+  if (isDbEnabled()) {
+    try {
+      await upsertOutboxEvent(event, 'NEW', 0);
+    } catch (error) {
+      logger.warn('mq.outbox_prepare_failed', {
+        eventId: event.eventId,
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+    }
+  }
+
   const connected = await ensureConnected();
   if (!connected) {
-    pushOutbox(event, 'mq_disconnected');
+    await pushOutbox(event, 'mq_disconnected');
     return { persistedToOutbox: true };
   }
 
@@ -222,7 +360,7 @@ export async function publishWaybillEvent(event: WaybillEvent): Promise<{ persis
     return { persistedToOutbox: false };
   } catch (error) {
     const reason = error instanceof Error ? error.message : 'publish_failed';
-    pushOutbox(event, reason);
+    await pushOutbox(event, reason);
     return { persistedToOutbox: true };
   }
 }
@@ -246,7 +384,31 @@ export async function flushOutbox(): Promise<{ sent: number; remaining: number }
     }
   }
 
-  return { sent, remaining: outbox.length };
+  const dbPending = await loadPendingOutbox(200);
+  for (const row of dbPending) {
+    const event = normalizeOutboxPayload(row.payload);
+    try {
+      await publishToExchange(event);
+      sent += 1;
+    } catch {
+      try {
+        await upsertOutboxEvent(event, 'FAILED', Number(row.retry_count ?? 0) + 1);
+      } catch {
+        // Keep best-effort semantics. Failures remain queryable in outbox_event.
+      }
+    }
+  }
+
+  const remainingDb = isDbEnabled()
+    ? await dbQuery<RowDataPacket[]>(
+      `SELECT COUNT(1) AS cnt
+       FROM outbox_event
+       WHERE publish_status IN ('NEW', 'FAILED')`,
+      )
+    : [];
+
+  const dbCount = remainingDb.length > 0 ? Number((remainingDb[0] as { cnt: number }).cnt ?? 0) : 0;
+  return { sent, remaining: outbox.length + dbCount };
 }
 
 export async function startWaybillConsumer(): Promise<void> {

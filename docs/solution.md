@@ -187,6 +187,19 @@ $$
 - 异常消息：进入死信队列 DLQ
 - 重试：普通队列 -> 重试队列 -> DLQ
 
+当前落地细节：
+
+- 交换机/队列全部 durable；消息发布设置 `deliveryMode=2`；发布后 `waitForConfirms` 确认；
+- 队列拓扑：
+  - 主队列 `waybill.events.q`（绑定主交换机）；
+  - 重试队列 `waybill.events.retry.q`（`x-message-ttl` 到期回流主交换机）；
+  - 死信队列 `waybill.events.dlq`（主队列消费失败或重试耗尽后进入）；
+- 消费重试阈值：`x-retry-count >= 3` 进入死信；
+- 去重与可追溯：
+  - `inbox_event` 以 `event_id` 唯一约束做消费去重，避免分布式多实例重复执行；
+  - `outbox_event` 持久化发布状态（NEW/FAILED/PUBLISHED），MQ 异常时可补偿重放；
+- 运行态观测：`GET /api/mq/status`、`POST /api/mq/outbox/flush`。
+
 ### 5.5 分表设计
 
 建议采用按月 + hash 的双层规则：
