@@ -1,6 +1,8 @@
 import type { BootstrapPayload, DashboardPayload, DocumentWarning, WaybillRecord } from './types';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+// In production the web app is behind the same gateway as the API.
+// Default to same-origin so requests go to /api/* via nginx reverse proxy.
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {

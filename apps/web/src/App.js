@@ -1,4 +1,4 @@
-import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+import { jsxs as _jsxs, jsx as _jsx } from "react/jsx-runtime";
 import { useEffect, useState } from 'react';
 import { createWaybill, fetchBootstrap, fetchDashboard, fetchWarnings, fetchWaybills } from './api';
 const defaultDraft = {
@@ -30,10 +30,12 @@ export function App() {
     const [draft, setDraft] = useState(defaultDraft);
     const [submitMessage, setSubmitMessage] = useState('');
     const [loading, setLoading] = useState(true);
+    const [loadError, setLoadError] = useState('');
     useEffect(() => {
         let cancelled = false;
         async function load() {
             try {
+                setLoadError('');
                 const [bootstrapData, dashboardData, waybillData, warningData] = await Promise.all([
                     fetchBootstrap(),
                     fetchDashboard(),
@@ -45,6 +47,11 @@ export function App() {
                     setDashboard(dashboardData);
                     setWaybills(waybillData.items);
                     setWarnings(warningData.items);
+                }
+            }
+            catch (error) {
+                if (!cancelled) {
+                    setLoadError(error instanceof Error ? error.message : '加载失败，请稍后重试');
                 }
             }
             finally {
@@ -78,6 +85,9 @@ export function App() {
         }
     }
     if (loading || !bootstrap || !dashboard) {
+        if (!loading && loadError) {
+            return _jsxs("div", { className: "loading-shell", children: ["\u52A0\u8F7D\u5931\u8D25\uFF1A", loadError] });
+        }
         return _jsx("div", { className: "loading-shell", children: "Loading internal admin console..." });
     }
     return (_jsxs("div", { className: "shell", children: [_jsxs("aside", { className: "sidebar", children: [_jsxs("div", { children: [_jsx("p", { className: "eyebrow", children: "Internal Logistics Suite" }), _jsx("h1", { children: "\u8FD0\u5355 & \u7ED3\u7B97\u7BA1\u7406\u540E\u53F0" }), _jsx("p", { className: "sidebar-copy", children: "\u9762\u5411\u8D27\u4E3B\u3001\u627F\u8FD0\u5546\u3001\u7BA1\u7406\u5458\u7684\u591A\u8BED\u8A00\u5185\u90E8\u63A7\u5236\u53F0\uFF0C\u8986\u76D6\u8FD0\u5355\u3001\u7ED3\u7B97\u3001\u6863\u6848\u9884\u8B66\u4E0E\u5206\u5E03\u5F0F\u67B6\u6784\u6CBB\u7406\u3002" })] }), _jsx("nav", { className: "nav-list", children: [

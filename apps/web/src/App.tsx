@@ -37,12 +37,14 @@ export function App() {
   const [draft, setDraft] = useState(defaultDraft);
   const [submitMessage, setSubmitMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
+        setLoadError('');
         const [bootstrapData, dashboardData, waybillData, warningData] = await Promise.all([
           fetchBootstrap(),
           fetchDashboard(),
@@ -54,6 +56,10 @@ export function App() {
           setDashboard(dashboardData);
           setWaybills(waybillData.items);
           setWarnings(warningData.items);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error.message : '加载失败，请稍后重试');
         }
       } finally {
         if (!cancelled) {
@@ -88,6 +94,9 @@ export function App() {
   }
 
   if (loading || !bootstrap || !dashboard) {
+    if (!loading && loadError) {
+      return <div className="loading-shell">加载失败：{loadError}</div>;
+    }
     return <div className="loading-shell">Loading internal admin console...</div>;
   }
 

@@ -1,4 +1,6 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+// In production the web app is behind the same gateway as the API.
+// Default to same-origin so requests go to /api/* via nginx reverse proxy.
+const API_BASE = import.meta.env.VITE_API_BASE_URL ?? '';
 async function request(path, init) {
     const response = await fetch(`${API_BASE}${path}`, {
         headers: {
