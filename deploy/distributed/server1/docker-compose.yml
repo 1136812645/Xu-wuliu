@@ -20,6 +20,8 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+    ports:
+      - "3001:3000"
     environment:
       INSTANCE_ID: api-1
       PORT: 3000
