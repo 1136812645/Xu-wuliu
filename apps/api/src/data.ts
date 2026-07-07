@@ -77,6 +77,15 @@ export const vehicles: VehicleProfile[] = [
     roadPermitExpiry: 'invalid-date',
     assignedDriverId: 'driver-2',
   },
+  {
+    id: 'vehicle-3',
+    plateNumber: '浙C77889',
+    truckType: '9.6M',
+    maxWeightKg: 18000,
+    maxVolumeM3: 55,
+    roadPermitExpiry: '2026-08-31',
+    assignedDriverId: 'driver-1',
+  },
 ];
 
 export const pricingRules: PricingRule[] = [
