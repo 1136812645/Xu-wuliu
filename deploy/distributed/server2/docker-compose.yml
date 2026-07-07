@@ -34,7 +34,7 @@ services:
       MYSQL_DATABASE: waybill_admin
       MYSQL_ROOT_HOST: "%"
     ports:
-      - "3306:3306"
+      - "13306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       - ./db/init:/docker-entrypoint-initdb.d
@@ -43,7 +43,7 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "16379:6379"
 
   rabbitmq:
     image: rabbitmq:3.13-management
@@ -52,8 +52,8 @@ services:
       RABBITMQ_DEFAULT_USER: waybill
       RABBITMQ_DEFAULT_PASS: waybill123
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "5673:5672"
+      - "15673:15672"
 
 volumes:
   mysql-data:
