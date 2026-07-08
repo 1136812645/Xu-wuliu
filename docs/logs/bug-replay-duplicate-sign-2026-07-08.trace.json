@@ -1,0 +1,119 @@
+﻿{
+    "replayAt":  "2026-07-08T21:37:07.3131413+08:00",
+    "waybillId":  "WB178271644",
+    "waybillNo":  "WB178271644",
+    "idempotency":  {
+                        "sign1":  "bugreplay3-sign1-a46ef17db7444404b0c683e98c2a0f70",
+                        "create":  "bugreplay3-create-3d761a45ea68477e90c98812b38e712e",
+                        "sign2":  "bugreplay3-sign2-0f6809b9b4094ffbb83da4d324ea2354"
+                    },
+    "sign1":  {
+                  "id":  "WB178271644",
+                  "waybillNo":  "WB178271644",
+                  "shipperId":  "shipper-2",
+                  "carrierId":  "carrier-2",
+                  "vehicleId":  "vehicle-mrc40xkz475",
+                  "mileageKm":  120,
+                  "weightKg":  1000,
+                  "volumeM3":  4,
+                  "goodsName":  "bug-replay-duplicate-sign-2026-07-08",
+                  "extraLoadingFee":  0,
+                  "subsidy":  0,
+                  "deduction":  0,
+                  "status":  "SIGNED",
+                  "fees":  [
+                               {
+                                   "type":  "LINE_HAUL",
+                                   "label":  "干线运费 / Line haul",
+                                   "amount":  972,
+                                   "formula":  "120km x 8.1"
+                               },
+                               {
+                                   "type":  "LOADING",
+                                   "label":  "装卸费 / Loading",
+                                   "amount":  190,
+                                   "formula":  "170 + 20"
+                               },
+                               {
+                                   "type":  "INSURANCE",
+                                   "label":  "保险费 / Insurance",
+                                   "amount":  10.69,
+                                   "formula":  "972 x 0.011"
+                               },
+                               {
+                                   "type":  "SUBSIDY",
+                                   "label":  "补贴 / Subsidy",
+                                   "amount":  0,
+                                   "formula":  "0"
+                               },
+                               {
+                                   "type":  "DEDUCTION",
+                                   "label":  "扣款 / Deduction",
+                                   "amount":  0,
+                                   "formula":  "0 x -1"
+                               }
+                           ],
+                  "totalAmount":  1172.69,
+                  "createdAt":  "2026-07-08T13:37:07.000Z",
+                  "signedAt":  "2026-07-08T05:37:07.000Z",
+                  "podUploaded":  false,
+                  "shardTable":  "waybill_202607_0"
+              },
+    "sign2":  {
+                  "idempotentBlocked":  true,
+                  "reason":  "ALREADY_SIGNED",
+                  "message":  "Duplicate SIGN operation was ignored because waybill is already signed.",
+                  "data":  {
+                               "id":  "WB178271644",
+                               "waybillNo":  "WB178271644",
+                               "shipperId":  "shipper-2",
+                               "carrierId":  "carrier-2",
+                               "vehicleId":  "vehicle-mrc40xkz475",
+                               "mileageKm":  120,
+                               "weightKg":  1000,
+                               "volumeM3":  4,
+                               "goodsName":  "bug-replay-duplicate-sign-2026-07-08",
+                               "extraLoadingFee":  0,
+                               "subsidy":  0,
+                               "deduction":  0,
+                               "status":  "SIGNED",
+                               "fees":  [
+                                            {
+                                                "type":  "LINE_HAUL",
+                                                "label":  "干线运费 / Line haul",
+                                                "amount":  972,
+                                                "formula":  "120km x 8.1"
+                                            },
+                                            {
+                                                "type":  "LOADING",
+                                                "label":  "装卸费 / Loading",
+                                                "amount":  190,
+                                                "formula":  "170 + 20"
+                                            },
+                                            {
+                                                "type":  "INSURANCE",
+                                                "label":  "保险费 / Insurance",
+                                                "amount":  10.69,
+                                                "formula":  "972 x 0.011"
+                                            },
+                                            {
+                                                "type":  "SUBSIDY",
+                                                "label":  "补贴 / Subsidy",
+                                                "amount":  0,
+                                                "formula":  "0"
+                                            },
+                                            {
+                                                "type":  "DEDUCTION",
+                                                "label":  "扣款 / Deduction",
+                                                "amount":  0,
+                                                "formula":  "0 x -1"
+                                            }
+                                        ],
+                               "totalAmount":  1172.69,
+                               "createdAt":  "2026-07-08T13:37:07.000Z",
+                               "signedAt":  "2026-07-08T05:37:07.000Z",
+                               "podUploaded":  false,
+                               "shardTable":  "waybill_202607_0"
+                           }
+              }
+}

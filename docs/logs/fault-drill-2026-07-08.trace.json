@@ -1,0 +1,68 @@
+﻿{
+  "apiBase": "http://127.0.0.1:3000",
+  "db": "waybill_admin",
+  "scenario": "dirty-data-and-mq-fault-drill",
+  "steps": {
+    "mqBaseline": {
+      "connected": false,
+      "consumerStarted": false,
+      "exchanges": {
+        "eventExchange": "waybill.events.x",
+        "retryExchange": "waybill.events.retry.x",
+        "deadLetterExchange": "waybill.events.dlx"
+      },
+      "queues": {
+        "eventQueue": "waybill.events.q",
+        "retryQueue": "waybill.events.retry.q",
+        "deadLetterQueue": "waybill.events.dlq"
+      },
+      "stats": {
+        "published": 0,
+        "publishFailed": 60,
+        "consumed": 0,
+        "duplicated": 0,
+        "deadLettered": 0
+      },
+      "outbox": {
+        "size": 0,
+        "items": []
+      },
+      "processedEventCount": 0
+    },
+    "sampleWaybill": {
+      "waybillId": "WB173443517",
+      "waybillNo": "WB173443517"
+    },
+    "duplicateSignInjection": {
+      "duplicateError": {
+        "code": "ER_DUP_ENTRY",
+        "message": "Duplicate entry 'WB173443517-SIGN' for key 'waybill_operation_log.uk_waybill_operation'"
+      },
+      "reasonHint": "Unique key uk_waybill_operation blocked duplicate SIGN operation."
+    },
+    "feeCorruptionAndRepair": {
+      "feeId": 346132,
+      "originalAmount": 972,
+      "mismatchCountAfterCorrupt": 1,
+      "mismatchCountAfterRepair": 0,
+      "reasonHint": "Detected by diagnostics: waybill_total != SUM(fee_detail)."
+    },
+    "mqQueueDownOrUnavailable": {
+      "connectedBefore": false,
+      "connectedAfterCreate": false,
+      "publishFailedAfterCreate": 64,
+      "outboxSizeAfterCreate": 0,
+      "reasonHint": "When MQ is unavailable, event should be persisted to outbox and business create still succeeds."
+    },
+    "mqIllegalPayloadRepairAndReplay": {
+      "illegalEventId": "manual-illegal-1783517348033",
+      "illegalCountAfterInject": 1,
+      "illegalCountAfterRepair": 0,
+      "flushResult": {
+        "sent": 0,
+        "remaining": 0
+      },
+      "reasonHint": "Repaired payload fields eventId/waybillNo/operation then replayed with flush."
+    }
+  }
+}
