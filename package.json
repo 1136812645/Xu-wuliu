@@ -12,7 +12,8 @@
     "dev:web": "npm run dev --workspace @waybill/web",
     "build": "npm run build --workspaces",
     "check": "npm run check --workspaces",
-    "test": "npm run test --workspace @waybill/api"
+    "test": "npm run test --workspace @waybill/api",
+    "check:git-history": "node scripts/validate-git-history.mjs"
   },
   "engines": {
     "node": ">=22"
