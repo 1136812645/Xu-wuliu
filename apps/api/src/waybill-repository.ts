@@ -27,6 +27,10 @@ export interface WaybillBatchImportResult {
   errors: string[];
 }
 
+/**
+ * Sync DB-backed settlement rules into the in-process calculation engine before DB create/import pricing.
+ * @returns resolves when pricing and adjustment rules are refreshed from DB.
+ */
 async function syncSettlementRulesForDbFeeCalculation(): Promise<void> {
   await replacePricingRulesFromDb();
   await replaceSettlementAdjustmentRulesFromDb();
@@ -155,6 +159,12 @@ function pushBoundedError(target: string[], message: string): void {
   }
 }
 
+/**
+ * Batch insert waybill base rows into one physical shard table.
+ * @param conn active transactional DB connection.
+ * @param table concrete shard table name.
+ * @param rows prepared rows already routed to the same shard.
+ */
 async function insertWaybillRowsBatch(
   conn: PoolConnection,
   table: string,
@@ -190,6 +200,11 @@ async function insertWaybillRowsBatch(
   );
 }
 
+/**
+ * Batch insert fee detail rows for imported or created waybills.
+ * @param conn active transactional DB connection.
+ * @param rows fee detail payload grouped by waybill number.
+ */
 async function insertFeeRowsBatch(
   conn: PoolConnection,
   rows: Array<{ waybillNo: string; fees: FeeComponent[] }>,
@@ -218,6 +233,11 @@ async function insertFeeRowsBatch(
   }
 }
 
+/**
+ * Batch insert operation-log rows so CREATE requests keep DB-level idempotency evidence.
+ * @param conn active transactional DB connection.
+ * @param rows waybill number and idempotency key pairs.
+ */
 async function insertOperationRowsBatch(
   conn: PoolConnection,
   rows: Array<{ waybillNo: string; idempotencyKey: string }>,
@@ -239,6 +259,11 @@ async function insertOperationRowsBatch(
   }
 }
 
+/**
+ * Find which CREATE idempotency keys already exist so batch import can treat them as successful replays.
+ * @param keys candidate idempotency keys from the incoming import chunk.
+ * @returns set of keys that are already present in waybill_operation_log.
+ */
 async function findExistingCreateIdempotencyKeys(keys: string[]): Promise<Set<string>> {
   if (keys.length === 0) {
     return new Set<string>();
@@ -299,6 +324,7 @@ export async function importWaybillChunkInDb(
   for (let i = 0; i < rowInputs.length; i += 1) {
     const { row, idempotencyKey } = rowInputs[i];
     if (existingIdempotencyKeys.has(idempotencyKey)) {
+      // Re-importing the same row is counted as success so one duplicate does not fail the entire chunk.
       idempotentHits += 1;
       continue;
     }
@@ -333,6 +359,7 @@ export async function importWaybillChunkInDb(
     try {
       const byTable = new Map<string, Array<{ waybillNo: string; draft: WaybillDraft; totalAmount: number; now: Date }>>();
       for (const row of prepared) {
+        // Group by physical shard first so each INSERT statement stays table-local and efficient.
         const list = byTable.get(row.table) ?? [];
         list.push({
           waybillNo: row.waybillNo,

@@ -1243,6 +1243,8 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
 
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
+    // Request-key idempotency is the first guard: identical retries return the stored
+    // snapshot immediately, without re-entering DB writes, MQ publish, or status changes.
     return res.status(200).json(idemSnapshot);
   }
 
@@ -1267,6 +1269,8 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
     }
 
     try {
+      // Lock serializes current contenders; occupation check confirms whether the vehicle
+      // is already held by an active waybill from an earlier successful request.
       const occupied = isDbEnabled()
         ? await hasActiveWaybillForVehicleInDb(parsed.data.vehicleId)
         : hasActiveWaybillForVehicleInMemory(parsed.data.vehicleId);
@@ -1283,6 +1287,8 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
       }
 
       const splitPlan = buildSplitPlan(parsed.data);
+      // Child drafts are revalidated before persistence so a bad split plan cannot leak
+      // an over-capacity child order into the database.
       const invalidChild = splitPlan.childDrafts.find((child) => !validateCapacity(child, vehicle).valid);
       if (invalidChild) {
         const invalidCapacity = validateCapacity(invalidChild, vehicle);
@@ -1307,6 +1313,8 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
           : createWaybill(draft, key);
 
         if (!existedBeforeCreate) {
+          // CREATE events are only emitted for the first successful create path.
+          // Replayed idempotent requests must not fan out duplicate MQ events.
           const mqResult = await publishWaybillEvent(
             buildWaybillEvent({
               waybillId: waybill.id,
@@ -1455,6 +1463,8 @@ app.post('/api/waybills/:id/upload-pod', requirePermission('pod:upload'), async 
   // Fast-path idempotency interception: return prior snapshot directly when key already exists.
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
+    // Reusing the same upload request key returns the prior result snapshot and avoids
+    // touching state timestamps or publishing the same UPLOAD_POD event again.
     return res.status(200).json({
       idempotentBlocked: true,
       reason: 'IDEMPOTENCY_KEY_HIT',

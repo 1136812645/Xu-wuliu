@@ -53,6 +53,11 @@ function splitAmount(total: number, parts: number): number[] {
   return values;
 }
 
+/**
+ * Build a deterministic split plan for an overweight / over-volume waybill draft.
+ * @param draft original waybill draft submitted by the user.
+ * @returns split plan containing child drafts that each satisfy both capacity constraints.
+ */
 export function buildSplitPlan(draft: WaybillDraft): WaybillSplitPlan {
   // Split planning is deterministic, so retries with the same draft are stable.
   const vehicle = vehicles.find((item) => item.id === draft.vehicleId);
@@ -117,6 +122,12 @@ export function buildSplitPlan(draft: WaybillDraft): WaybillSplitPlan {
   throw new Error('Unable to generate a valid split plan within safe limit.');
 }
 
+/**
+ * Find the pricing rule that matches shipper, vehicle type, and mileage interval.
+ * @param draft waybill draft to price.
+ * @param vehicle resolved vehicle archive used to determine truck type.
+ * @returns one matched pricing rule.
+ */
 function findRule(draft: WaybillDraft, vehicle: VehicleProfile): PricingRule {
   const rule = pricingRules.find(
     (item) =>
@@ -272,6 +283,12 @@ export function resolveShardTable(waybillNo: string, createdAt: Date, shardCount
   return `waybill_${month}_${tail}`;
 }
 
+/**
+ * Validate draft weight and volume against the assigned vehicle capacity.
+ * @param draft waybill draft that may need blocking or auto-splitting.
+ * @param vehicle assigned vehicle archive record.
+ * @returns validation result including exact overweight / over-volume numbers.
+ */
 export function validateCapacity(draft: WaybillDraft, vehicle: VehicleProfile): CapacityValidationResult {
   const overweightKg = Math.max(0, draft.weightKg - vehicle.maxWeightKg);
   const overVolumeM3 = Math.max(0, draft.volumeM3 - vehicle.maxVolumeM3);
@@ -315,6 +332,7 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
   }
 
   const rule = findRule(draft, vehicle);
+  // Positive fee items are accumulated independently so each formula remains traceable in settlement detail.
   const lineHaul = roundCurrency(draft.mileageKm * rule.unitPricePerKm);
   const loading = roundCurrency(rule.loadingFee + draft.extraLoadingFee);
   const insurance = roundCurrency(lineHaul * rule.insuranceRate);
@@ -362,6 +380,7 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
     }
     const amount = resolveAdjustmentAmount(item, lineHaul);
     if (item.category === 'LOADING') {
+      // LOADING adjustments are positive additions, even when they are computed as a line-haul rate.
       fees.push({
         type: 'LOADING',
         label: `${item.label} / ${item.code}`,
@@ -371,6 +390,7 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
       continue;
     }
 
+    // DEDUCTION adjustments are converted to negative amounts so downstream total aggregation stays arithmetic.
     fees.push({
       type: 'DEDUCTION',
       label: `${item.label} / ${item.code}`,
@@ -389,6 +409,12 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
   };
 }
 
+/**
+ * Create one waybill in memory mode while preserving the same idempotent semantics as DB mode.
+ * @param draft validated waybill draft.
+ * @param idempotencyKey optional request-level idempotency key.
+ * @returns created or previously created waybill record.
+ */
 export function createWaybill(draft: WaybillDraft, idempotencyKey?: string): WaybillRecord {
   // The memory path preserves idempotent semantics as fallback when DB is unavailable.
   if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
@@ -421,6 +447,13 @@ export function createWaybill(draft: WaybillDraft, idempotencyKey?: string): Way
   return record;
 }
 
+/**
+ * Transition one in-memory waybill through SIGN / UPLOAD_POD with action-level idempotent interception.
+ * @param waybillId target waybill business id.
+ * @param action transition action, limited to SIGN or UPLOAD_POD.
+ * @param idempotencyKey optional idempotency key; falls back to waybillId + action.
+ * @returns latest waybill snapshot after transition or idempotent replay.
+ */
 export function transitionWaybill(
   waybillId: string,
   action: 'SIGN' | 'UPLOAD_POD',
@@ -438,11 +471,13 @@ export function transitionWaybill(
 
   const actionKey = idempotencyKey ?? `${waybillId}:${action}`;
   if (idempotencyStore.has(actionKey)) {
+    // Same action key means this transition was already applied or acknowledged before.
     return waybill;
   }
 
   if (action === 'SIGN') {
     if (waybill.status === 'SIGNED' || waybill.status === 'POD_UPLOADED') {
+      // Once a waybill is signed or fully completed, repeated sign requests must be ignored.
       return waybill;
     }
     waybill.status = 'SIGNED';
@@ -451,6 +486,7 @@ export function transitionWaybill(
 
   if (action === 'UPLOAD_POD') {
     if (waybill.podUploaded) {
+      // POD upload is terminal; duplicate uploads return the current state without writing again.
       return waybill;
     }
     if (waybill.status !== 'SIGNED' && waybill.status !== 'POD_UPLOADED') {

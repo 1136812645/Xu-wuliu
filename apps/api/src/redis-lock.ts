@@ -48,6 +48,13 @@ async function getRedisClient(): Promise<Redis> {
   return redisClient;
 }
 
+/**
+ * Attempt one Redis NX/PX lock acquisition round.
+ * @param key business lock key.
+ * @param token unique owner token used for safe release.
+ * @param ttlMs lock expiration in milliseconds.
+ * @returns true when the caller won the lock.
+ */
 async function tryAcquireLock(key: string, token: string, ttlMs: number): Promise<boolean> {
   const client = await getRedisClient();
   // NX + PX guarantees only one winner and avoids dead locks by ttl expiration.
@@ -80,6 +87,7 @@ export async function acquireDistributedLock(
         release: async () => {
           try {
             const client = await getRedisClient();
+            // Compare-and-delete by token ensures one request cannot release another request's lock by mistake.
             await client.eval(RELEASE_LOCK_SCRIPT, 1, key, token);
           } catch (error) {
             if (error instanceof Error) {
@@ -90,6 +98,7 @@ export async function acquireDistributedLock(
       };
     }
 
+    // Bounded retry avoids one waiting request spinning forever when another request holds the same vehicle lock.
     await new Promise((resolve) => setTimeout(resolve, retryIntervalMs));
   }
 

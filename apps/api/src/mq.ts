@@ -154,13 +154,13 @@ async function upsertOutboxEvent(event: WaybillEvent, publishStatus: 'NEW' | 'FA
   });
 }
 
-async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'CONSUMED' | 'DEAD_LETTER', retryCount: number): Promise<void> {
 /**
- * Try to insert one inbox row as consumer dedupe guard.
- * @param event parsed waybill event.
- * @param payload raw json payload string.
- * @returns true when event is first seen, false when duplicated.
+ * Update one inbox event consume status after first-seen detection.
+ * @param eventId unique MQ event id.
+ * @param consumeStatus target inbox state.
+ * @param retryCount current retry count to persist for replay / DLQ observation.
  */
+async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'CONSUMED' | 'DEAD_LETTER', retryCount: number): Promise<void> {
   if (!isDbEnabled()) {
     return;
   }
@@ -173,6 +173,12 @@ async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'C
   );
 }
 
+/**
+ * Try to insert one inbox row as consumer dedupe guard.
+ * @param event parsed waybill event.
+ * @param payload raw json payload string.
+ * @returns true when event is first seen, false when duplicated.
+ */
 async function tryRecordInboxEvent(event: WaybillEvent, payload: string): Promise<boolean> {
   if (!isDbEnabled()) {
     if (processedEventIds.has(event.eventId)) {
@@ -283,6 +289,11 @@ async function routeToRetry(message: ConsumeMessage, retryCount: number): Promis
   await publishChannel.waitForConfirms();
 }
 
+/**
+ * Parse one RabbitMQ message into a typed waybill event.
+ * @param message raw consume message from the event queue.
+ * @returns parsed business event.
+ */
 function parseEvent(message: ConsumeMessage): WaybillEvent {
   const content = message.content.toString('utf-8');
   return JSON.parse(content) as WaybillEvent;
@@ -336,6 +347,7 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
     }
 
     try {
+      // Retry flow republishes first, then ACKs the original message, so we do not lose a failed payload in-flight.
       await routeToRetry(message, retryCount + 1);
       if (parsed?.eventId) {
         await updateInboxStatus(parsed.eventId, 'RETRYING', retryCount + 1);
@@ -419,6 +431,7 @@ export async function flushOutbox(): Promise<{ sent: number; remaining: number }
       sent += 1;
     } catch {
       try {
+        // DB outbox rows remain queryable for later replay even when this flush round still cannot send them.
         await upsertOutboxEvent(event, 'FAILED', Number(row.retry_count ?? 0) + 1);
       } catch {
         // Keep best-effort semantics. Failures remain queryable in outbox_event.
@@ -445,6 +458,7 @@ export async function startWaybillConsumer(): Promise<void> {
   }
 
   consumerStarted = true;
+  // Prefetch limits concurrent in-flight messages so retry / dedupe pressure stays bounded per consumer instance.
   await consumeChannel.prefetch(20);
   await consumeChannel.consume(EVENT_QUEUE, (message: ConsumeMessage | null) => {
     void handleMessage(message);
