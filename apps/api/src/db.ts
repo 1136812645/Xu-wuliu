@@ -1,4 +1,4 @@
-import mysql, { type Pool, type PoolConnection, type RowDataPacket } from 'mysql2/promise';
+import mysql, { type Pool, type PoolConnection, type ResultSetHeader, type RowDataPacket } from 'mysql2/promise';
 import * as logger from './logger.js';
 
 let pool: Pool | null = null;
@@ -83,4 +83,12 @@ export async function dbQuery<T extends RowDataPacket[] = RowDataPacket[]>(sql: 
   }
   const [rows] = await pool.query<T>(sql, params);
   return rows;
+}
+
+export async function dbExecute(sql: string, params: unknown[] = []): Promise<ResultSetHeader> {
+  if (!pool) {
+    throw new Error('Database is not initialized.');
+  }
+  const [result] = await pool.query<ResultSetHeader>(sql, params);
+  return result;
 }

@@ -36,6 +36,16 @@ services:
       DB_NAME: waybill_admin
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      RABBITMQ_URL: amqp://waybill:waybill123@rabbitmq:5672
+      RABBITMQ_EVENT_EXCHANGE: waybill.events.x
+      RABBITMQ_RETRY_EXCHANGE: waybill.events.retry.x
+      RABBITMQ_DLX_EXCHANGE: waybill.events.dlx
+      RABBITMQ_EVENT_QUEUE: waybill.events.q
+      RABBITMQ_RETRY_QUEUE: waybill.events.retry.q
+      RABBITMQ_DLQ_QUEUE: waybill.events.dlq
+      RABBITMQ_EVENT_ROUTING_KEY: waybill.status.changed
+      RABBITMQ_RETRY_ROUTING_KEY: waybill.status.changed.retry
+      RABBITMQ_RETRY_DELAY_MS: 10000
     restart: unless-stopped
     depends_on:
       - mysql
@@ -62,6 +72,16 @@ services:
       DB_NAME: waybill_admin
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      RABBITMQ_URL: amqp://waybill:waybill123@rabbitmq:5672
+      RABBITMQ_EVENT_EXCHANGE: waybill.events.x
+      RABBITMQ_RETRY_EXCHANGE: waybill.events.retry.x
+      RABBITMQ_DLX_EXCHANGE: waybill.events.dlx
+      RABBITMQ_EVENT_QUEUE: waybill.events.q
+      RABBITMQ_RETRY_QUEUE: waybill.events.retry.q
+      RABBITMQ_DLQ_QUEUE: waybill.events.dlq
+      RABBITMQ_EVENT_ROUTING_KEY: waybill.status.changed
+      RABBITMQ_RETRY_ROUTING_KEY: waybill.status.changed.retry
+      RABBITMQ_RETRY_DELAY_MS: 10000
     restart: unless-stopped
     depends_on:
       - mysql
@@ -95,6 +115,9 @@ services:
   rabbitmq:
     image: rabbitmq:3.13-management
     restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: waybill
+      RABBITMQ_DEFAULT_PASS: waybill123
     ports:
       - '5672:5672'
       - '15672:15672'

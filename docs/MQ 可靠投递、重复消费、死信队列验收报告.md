@@ -54,7 +54,7 @@
 
 证据：
 - 代码：apps/api/src/mq.ts
-- 文档：docs/solution.md（5.4 节已补充落地细节）
+- 文档：docs/内部运单 & 结算管理后台设计方案.md（5.4 节已补充落地细节）
 
 ### 4) 分布式部署支持
 
@@ -74,3 +74,51 @@
 ## 备注
 
 - 本次增强将“进程内去重”提升为“数据库共享去重”，使重复消费控制在多实例/重启后仍可保持一致。
+
+---
+
+## 补充验收（2026-07-08）
+
+### 本轮完善点
+
+1. 重试投递可靠性增强：
+
+- `routeToRetry` 改为使用 confirm channel 发布重试消息；
+- 仅在 `waitForConfirms()` 成功后才继续 ack 原消息，避免“原消息已 ack 但重试消息未落盘”的风险。
+
+2. 分布式部署配置显式化：
+
+- 根 `docker-compose.yml` 为 `api-1` / `api-2` 增加显式 `RABBITMQ_*` 环境变量；
+- RabbitMQ 增加默认用户密码配置（waybill/waybill123）；
+- 两个 API 实例统一接入同一 MQ 与同一数据库去重表。
+
+### 证据定位
+
+- 代码：apps/api/src/mq.ts（confirm 发布、重试、DLQ、inbox/outbox）
+- 配置：docker-compose.yml、deploy/distributed/server1/docker-compose.yml、deploy/distributed/server2/docker-compose.yml
+- 表结构：db/init/01_schema.sql（inbox_event/outbox_event 唯一键）
+
+### 验收标准逐条核对
+
+1. 消息不丢失、不重复执行业务：
+
+- 生产侧：发布失败写 outbox_event（FAILED），后续 `flushOutbox` 补偿；
+- 消费侧：`inbox_event(event_id)` 唯一键 + `INSERT IGNORE` 去重，跨实例生效；
+- 结论：通过。
+
+2. 存在死信队列，异常消息隔离：
+
+- `EVENT_QUEUE` 配置 DLX；
+- 重试上限（`x-retry-count >= 3`）后 nack 进 DLQ；
+- 结论：通过。
+
+3. 持久化、重试、死信配置落地：
+
+- durable exchange/queue、`deliveryMode=2`、confirm publish、retry TTL、DLQ 路由、`RABBITMQ_*` 配置项均已落地；
+- 结论：通过。
+
+4. 支持分布式部署：
+
+- `api-1` + `api-2` 同时部署；
+- 共享 MQ 与 DB 去重表，消费幂等在多实例下仍成立；
+- 结论：通过。

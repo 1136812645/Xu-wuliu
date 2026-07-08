@@ -29,9 +29,20 @@ INSERT INTO pricing_rule (shipper_id, truck_type, min_mileage_km, max_mileage_km
 VALUES
   ('shipper-1', '9.6M', 0, 300, 8.20, 180.00, 0.0120),
   ('shipper-1', '9.6M', 301, 2000, 7.60, 180.00, 0.0120),
-  ('shipper-2', '6.8M', 0, 1500, 6.90, 120.00, 0.0100)
+  ('shipper-2', '6.8M', 0, 1500, 6.90, 120.00, 0.0100),
+  ('shipper-2', '9.6M', 0, 300, 8.10, 170.00, 0.0110),
+  ('shipper-2', '9.6M', 301, 2000, 7.50, 170.00, 0.0110)
 ON DUPLICATE KEY UPDATE unit_price_per_km = VALUES(unit_price_per_km), loading_fee = VALUES(loading_fee), insurance_rate = VALUES(insurance_rate);
 
 INSERT INTO waybill_route_config (route_month, shard_count, physical_table_prefix)
 VALUES ('202607', 4, 'waybill_202607')
 ON DUPLICATE KEY UPDATE shard_count = VALUES(shard_count), physical_table_prefix = VALUES(physical_table_prefix);
+
+INSERT INTO auth_user (id, email, name, role, password_hash, google_sub, picture_url)
+VALUES
+  ('user-admin-seed', 'admin@example.com', 'Admin User', 'ADMIN', NULL, NULL, NULL),
+  ('user-shipper-seed', 'shipper@example.com', 'Shipper User', 'SHIPPER', NULL, NULL, NULL),
+  ('user-carrier-seed', 'carrier@example.com', 'Carrier User', 'CARRIER', NULL, NULL, NULL)
+ON DUPLICATE KEY UPDATE
+  name = VALUES(name),
+  role = VALUES(role);

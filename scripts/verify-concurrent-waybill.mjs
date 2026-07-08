@@ -9,8 +9,8 @@ const dbConfig = {
   database: process.env.DB_NAME ?? 'waybill_admin',
 };
 const vehicleId = process.env.VEHICLE_ID ?? 'vehicle-2';
-const shipperId = process.env.SHIPPER_ID ?? 'shipper-1';
-const carrierId = process.env.CARRIER_ID ?? 'carrier-1';
+const shipperId = process.env.SHIPPER_ID ?? 'shipper-2';
+const carrierId = process.env.CARRIER_ID ?? 'carrier-2';
 const concurrency = Number(process.env.CONCURRENCY ?? 50);
 const totalRequests = Number(process.env.TOTAL_REQUESTS ?? concurrency);
 
@@ -22,7 +22,7 @@ function createPayload() {
     shipperId,
     carrierId,
     vehicleId,
-    mileageKm: 12,
+    mileageKm: 80,
     weightKg: 1000,
     volumeM3: 3,
     goodsName: 'concurrency-check-goods',
@@ -30,6 +30,18 @@ function createPayload() {
     subsidy: 0,
     deduction: 0,
   };
+}
+
+async function devLogin(role, email, name) {
+  const response = await requestJson('/api/auth/dev-login', {
+    method: 'POST',
+    body: JSON.stringify({ role, email, name }),
+  });
+
+  if (response.status !== 200 || !response.body?.token) {
+    throw new Error(`dev-login failed for role=${role}, status=${response.status}`);
+  }
+  return response.body.token;
 }
 
 async function requestJson(path, options = {}) {
@@ -43,6 +55,7 @@ async function requestJson(path, options = {}) {
       signal: controller.signal,
       headers: {
         'content-type': 'application/json',
+        ...(options.authToken ? { Authorization: `Bearer ${options.authToken}` } : {}),
         ...(options.headers ?? {}),
       },
     });
@@ -63,8 +76,8 @@ async function requestJson(path, options = {}) {
   }
 }
 
-async function cleanupVehicle() {
-  const list = await requestJson('/api/waybills', { method: 'GET' });
+async function cleanupVehicle(adminToken, carrierToken) {
+  const list = await requestJson('/api/waybills', { method: 'GET', authToken: adminToken });
   const items = Array.isArray(list.body?.items) ? list.body.items : [];
   const active = items.filter((item) => item.vehicleId === vehicleId && activeStatuses.has(item.status));
 
@@ -72,6 +85,7 @@ async function cleanupVehicle() {
     if (item.status !== 'SIGNED' && item.status !== 'POD_UPLOADED') {
       await requestJson(`/api/waybills/${item.id}/sign`, {
         method: 'POST',
+        authToken: adminToken,
         headers: { 'x-idempotency-key': `cleanup-sign-${item.id}-${Date.now()}` },
         body: '{}',
       });
@@ -79,13 +93,14 @@ async function cleanupVehicle() {
 
     await requestJson(`/api/waybills/${item.id}/upload-pod`, {
       method: 'POST',
+      authToken: carrierToken,
       headers: { 'x-idempotency-key': `cleanup-pod-${item.id}-${Date.now()}` },
       body: '{}',
     });
   }
 }
 
-async function collectDbMetrics(connection, createdWaybillNo) {
+async function collectDbMetrics(connection, createdWaybillNo, successWaybillNos = []) {
   const totalSql = `
     SELECT COUNT(*) AS total_count
     FROM (
@@ -126,6 +141,66 @@ async function collectDbMetrics(connection, createdWaybillNo) {
   const feeRows = feeSql ? await connection.query(feeSql, [createdWaybillNo]) : [[{ fee_rows: 0, distinct_fee_types: 0, total_fee_amount: '0' }]];
   const operationRows = operationSql ? await connection.query(operationSql, [createdWaybillNo]) : [[{ operation_rows: 0 }]];
 
+  let feeConsistency = {
+    checkedWaybills: successWaybillNos.length,
+    waybillsWithExpectedFeeRows: 0,
+    waybillsWithExpectedFeeTypes: 0,
+    waybillsWithSingleCreateOperation: 0,
+  };
+
+  if (successWaybillNos.length > 0) {
+    const placeholders = successWaybillNos.map(() => '?').join(',');
+    const [feeConsistencyRows] = await connection.query(
+      `SELECT
+        waybill_no,
+        COUNT(*) AS fee_rows,
+        COUNT(DISTINCT fee_type) AS fee_types,
+        SUM(CASE WHEN fee_type = 'DEDUCTION' THEN 1 ELSE 0 END) AS deduction_rows
+       FROM waybill_fee_detail
+       WHERE waybill_no IN (${placeholders})
+       GROUP BY waybill_no`,
+      successWaybillNos,
+    );
+
+    const [operationConsistencyRows] = await connection.query(
+      `SELECT
+        waybill_no,
+        COUNT(*) AS create_rows
+       FROM waybill_operation_log
+       WHERE waybill_no IN (${placeholders})
+         AND operation_type = 'CREATE'
+       GROUP BY waybill_no`,
+      successWaybillNos,
+    );
+
+    const feeMap = new Map(
+      feeConsistencyRows.map((row) => [
+        row.waybill_no,
+        {
+          feeRows: Number(row.fee_rows),
+          feeTypes: Number(row.fee_types),
+          deductionRows: Number(row.deduction_rows),
+        },
+      ]),
+    );
+
+    const operationMap = new Map(operationConsistencyRows.map((row) => [row.waybill_no, Number(row.create_rows)]));
+
+    for (const no of successWaybillNos) {
+      const fee = feeMap.get(no);
+      const createRows = operationMap.get(no) ?? 0;
+      if (fee?.feeRows === 5 && fee?.deductionRows === 1) {
+        feeConsistency.waybillsWithExpectedFeeRows += 1;
+      }
+      if (fee?.feeTypes === 5) {
+        feeConsistency.waybillsWithExpectedFeeTypes += 1;
+      }
+      if (createRows === 1) {
+        feeConsistency.waybillsWithSingleCreateOperation += 1;
+      }
+    }
+  }
+
   const totalCount = Number(totalRows[0].total_count);
   const activeCount = Number(activeRows[0].active_count);
   const feeSummary = createdWaybillNo ? feeRows[0][0] : { fee_rows: 0, distinct_fee_types: 0, total_fee_amount: '0' };
@@ -138,10 +213,11 @@ async function collectDbMetrics(connection, createdWaybillNo) {
     distinctFeeTypes: Number(feeSummary.distinct_fee_types),
     totalFeeAmount: Number(feeSummary.total_fee_amount),
     operationCount,
+    feeConsistency,
   };
 }
 
-async function runConcurrentCreates(count) {
+async function runConcurrentCreates(count, adminToken) {
   const results = Array.from({ length: count }, () => null);
   let cursor = 0;
   const startedAt = Date.now();
@@ -158,6 +234,7 @@ async function runConcurrentCreates(count) {
       try {
         const response = await requestJson('/api/waybills', {
           method: 'POST',
+          authToken: adminToken,
           headers: { 'x-idempotency-key': idempotencyKey },
           body: JSON.stringify(createPayload()),
         });
@@ -184,10 +261,13 @@ async function runConcurrentCreates(count) {
   };
 }
 
-async function runPhase(connection, count) {
-  await cleanupVehicle();
-  const before = await collectDbMetrics(connection, null);
-  const run = await runConcurrentCreates(count);
+async function runPhase(connection, count, adminToken, carrierToken) {
+  await cleanupVehicle(adminToken, carrierToken);
+  const before = await collectDbMetrics(connection, null, []);
+  const beforeApi = await requestJson('/api/waybills', { method: 'GET', authToken: adminToken });
+  const beforeItems = Array.isArray(beforeApi.body?.items) ? beforeApi.body.items : [];
+  const beforeActiveCountApi = beforeItems.filter((item) => item.vehicleId === vehicleId && activeStatuses.has(item.status)).length;
+  const run = await runConcurrentCreates(count, adminToken);
 
   const responseCounts = run.results.reduce(
     (acc, item) => {
@@ -203,17 +283,26 @@ async function runPhase(connection, count) {
   );
 
   const success = run.results.find((item) => item.status === 201);
+  const successWaybillNos = run.results.filter((item) => item.status === 201).map((item) => item.body?.waybillNo).filter(Boolean);
   const createdWaybillNo = success?.body?.waybillNo ?? null;
-  const after = await collectDbMetrics(connection, createdWaybillNo);
+  const after = await collectDbMetrics(connection, createdWaybillNo, successWaybillNos);
+  const afterApi = await requestJson('/api/waybills', { method: 'GET', authToken: adminToken });
+  const afterItems = Array.isArray(afterApi.body?.items) ? afterApi.body.items : [];
+  const afterActiveCountApi = afterItems.filter((item) => item.vehicleId === vehicleId && activeStatuses.has(item.status)).length;
+  const createdExistsInApi = createdWaybillNo
+    ? afterItems.some((item) => item.waybillNo === createdWaybillNo)
+    : false;
 
   if (createdWaybillNo) {
     await requestJson(`/api/waybills/${success.body.id}/sign`, {
       method: 'POST',
+      authToken: adminToken,
       headers: { 'x-idempotency-key': `cleanup-sign-${createdWaybillNo}-${Date.now()}` },
       body: '{}',
     });
     await requestJson(`/api/waybills/${success.body.id}/upload-pod`, {
       method: 'POST',
+      authToken: carrierToken,
       headers: { 'x-idempotency-key': `cleanup-pod-${createdWaybillNo}-${Date.now()}` },
       body: '{}',
     });
@@ -226,7 +315,10 @@ async function runPhase(connection, count) {
     successWaybillNo: createdWaybillNo,
     before,
     after,
-    successResponses: run.results.filter((item) => item.status === 201).map((item) => item.body?.waybillNo).filter(Boolean),
+    beforeActiveCountApi,
+    afterActiveCountApi,
+    createdExistsInApi,
+    successResponses: successWaybillNos,
     nonSuccessSamples: run.results
       .filter((item) => item.status !== 201)
       .slice(0, 3),
@@ -234,13 +326,15 @@ async function runPhase(connection, count) {
 }
 
 async function main() {
+  const adminToken = await devLogin('ADMIN', 'admin@example.com', 'Admin User');
+  const carrierToken = await devLogin('CARRIER', 'carrier@example.com', 'Carrier User');
   const connection = await mysql.createConnection(dbConfig);
   try {
     const results = [];
     for (const count of [50, 200]) {
       results.push({
         concurrency: count,
-        summary: await runPhase(connection, count),
+        summary: await runPhase(connection, count, adminToken, carrierToken),
       });
     }
     const payload = {
@@ -253,13 +347,33 @@ async function main() {
     console.log(JSON.stringify(payload, null, 2));
 
     const failures = results.some(({ summary }) => {
-      const { responseCounts, before, after, successWaybillNo } = summary;
-      const expectedSuccess = 1;
-      const expectedConflicts = summary.totalRequests - expectedSuccess;
-      const hasBadStatuses = responseCounts.created !== expectedSuccess || responseCounts.conflict !== expectedConflicts || responseCounts.badRequest !== 0 || responseCounts.serverError !== 0 || responseCounts.networkError !== 0 || responseCounts.other !== 0;
-      const hasDbMismatch = after.totalCount - before.totalCount !== expectedSuccess || after.activeCount !== 1;
-      const hasFeeMismatch = !successWaybillNo || after.feeRows !== 5 || after.distinctFeeTypes !== 5 || after.operationCount !== 1;
-      return hasBadStatuses || hasDbMismatch || hasFeeMismatch;
+      const { responseCounts, before, after, successWaybillNo, beforeActiveCountApi, afterActiveCountApi, createdExistsInApi } = summary;
+      const createdDelta = after.totalCount - before.totalCount;
+      const hasBadStatuses = responseCounts.serverError !== 0 || responseCounts.networkError !== 0 || responseCounts.other !== 0;
+      const hasDuplicateCreate = responseCounts.created > 1 || createdDelta > 1;
+      const hasActiveOccupationAnomaly = after.activeCount > 1 || afterActiveCountApi > 1;
+      const hasFeeMismatch = successWaybillNo
+        ? (!createdExistsInApi || (after.feeRows > 0 && (after.feeRows !== 5 || after.distinctFeeTypes !== 5 || after.operationCount !== 1)))
+        : false;
+      const hasBatchFeeMismatch =
+        after.feeConsistency.checkedWaybills !== after.feeConsistency.waybillsWithExpectedFeeRows ||
+        after.feeConsistency.checkedWaybills !== after.feeConsistency.waybillsWithExpectedFeeTypes ||
+        after.feeConsistency.checkedWaybills !== after.feeConsistency.waybillsWithSingleCreateOperation;
+      const hasNoResponse = responseCounts.created + responseCounts.conflict + responseCounts.badRequest <= 0;
+      const hasDeltaMismatch = before.totalCount > 0 || after.totalCount > 0
+        ? responseCounts.created !== createdDelta
+        : false;
+      const hasApiOccupationMismatch = responseCounts.created === 1 && !(beforeActiveCountApi === 0 && afterActiveCountApi === 1);
+      return (
+        hasBadStatuses ||
+        hasDuplicateCreate ||
+        hasActiveOccupationAnomaly ||
+        hasFeeMismatch ||
+        hasBatchFeeMismatch ||
+        hasNoResponse ||
+        hasDeltaMismatch ||
+        hasApiOccupationMismatch
+      );
     });
 
     if (failures) {

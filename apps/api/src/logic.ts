@@ -28,14 +28,28 @@ function roundCurrency(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
 }
 
+function toCents(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100);
+}
+
+function fromCents(cents: number): number {
+  return roundCurrency(cents / 100);
+}
+
+function sumCurrency(values: number[]): number {
+  const totalCents = values.reduce((sum, value) => sum + toCents(value), 0);
+  return fromCents(totalCents);
+}
+
 function splitAmount(total: number, parts: number): number[] {
   if (parts <= 0) {
     return [];
   }
-  const avg = roundCurrency(total / parts);
-  const values = Array.from({ length: parts }, () => avg);
-  const consumed = roundCurrency(values.slice(0, parts - 1).reduce((sum, item) => sum + item, 0));
-  values[parts - 1] = roundCurrency(total - consumed);
+  const totalCents = toCents(total);
+  const baseCents = Math.trunc(totalCents / parts);
+  const remainder = totalCents - baseCents * parts;
+  // Make split deterministic and cent-accurate to avoid drift during high-volume splits.
+  const values = Array.from({ length: parts }, (_v, index) => fromCents(index < remainder ? baseCents + 1 : baseCents));
   return values;
 }
 
@@ -57,33 +71,50 @@ export function buildSplitPlan(draft: WaybillDraft): WaybillSplitPlan {
     };
   }
 
-  const parts = validation.suggestedSplitCount;
-  const weightParts = splitAmount(draft.weightKg, parts);
-  const volumeParts = splitAmount(draft.volumeM3, parts);
-  const loadingParts = splitAmount(draft.extraLoadingFee, parts);
-  const subsidyParts = splitAmount(draft.subsidy, parts);
-  const deductionParts = splitAmount(draft.deduction, parts);
-
-  const childDrafts: WaybillDraft[] = [];
-  for (let i = 0; i < parts; i += 1) {
-    childDrafts.push({
-      ...draft,
-      goodsName: `${draft.goodsName} [S${i + 1}/${parts}]`,
-      weightKg: weightParts[i],
-      volumeM3: volumeParts[i],
-      extraLoadingFee: loadingParts[i],
-      subsidy: subsidyParts[i],
-      deduction: deductionParts[i],
-    });
+  const impossibleWeightSplit = vehicle.maxWeightKg <= 0 && draft.weightKg > 0;
+  const impossibleVolumeSplit = vehicle.maxVolumeM3 <= 0 && draft.volumeM3 > 0;
+  if (impossibleWeightSplit || impossibleVolumeSplit) {
+    throw new Error('Vehicle capacity configuration is invalid for split planning.');
   }
 
-  return {
-    splitRequired: true,
-    suggestedSplitCount: parts,
-    overweightKg: validation.overweightKg,
-    overVolumeM3: validation.overVolumeM3,
-    childDrafts,
-  };
+  let parts = validation.suggestedSplitCount;
+
+  // Keep increasing split parts until each child satisfies both weight and volume constraints.
+  while (parts <= 1000) {
+    const weightParts = splitAmount(draft.weightKg, parts);
+    const volumeParts = splitAmount(draft.volumeM3, parts);
+    const loadingParts = splitAmount(draft.extraLoadingFee, parts);
+    const subsidyParts = splitAmount(draft.subsidy, parts);
+    const deductionParts = splitAmount(draft.deduction, parts);
+
+    const childDrafts: WaybillDraft[] = [];
+    for (let i = 0; i < parts; i += 1) {
+      childDrafts.push({
+        ...draft,
+        goodsName: `${draft.goodsName} [S${i + 1}/${parts}]`,
+        weightKg: weightParts[i],
+        volumeM3: volumeParts[i],
+        extraLoadingFee: loadingParts[i],
+        subsidy: subsidyParts[i],
+        deduction: deductionParts[i],
+      });
+    }
+
+    const allChildrenWithinCapacity = childDrafts.every((child) => validateCapacity(child, vehicle).valid);
+    if (allChildrenWithinCapacity) {
+      return {
+        splitRequired: true,
+        suggestedSplitCount: parts,
+        overweightKg: validation.overweightKg,
+        overVolumeM3: validation.overVolumeM3,
+        childDrafts,
+      };
+    }
+
+    parts += 1;
+  }
+
+  throw new Error('Unable to generate a valid split plan within safe limit.');
 }
 
 function findRule(draft: WaybillDraft, vehicle: VehicleProfile): PricingRule {
@@ -104,6 +135,7 @@ function findRule(draft: WaybillDraft, vehicle: VehicleProfile): PricingRule {
 
 function normalizeRule(rule: PricingRule): PricingRule {
   return {
+    id: rule.id,
     shipperId: rule.shipperId,
     truckType: rule.truckType,
     minMileageKm: Number(rule.minMileageKm),
@@ -116,6 +148,7 @@ function normalizeRule(rule: PricingRule): PricingRule {
 
 function normalizeSettlementAdjustmentRule(rule: SettlementAdjustmentRule): SettlementAdjustmentRule {
   return {
+    id: rule.id,
     code: rule.code.trim(),
     label: rule.label.trim(),
     category: rule.category,
@@ -145,6 +178,14 @@ export function upsertPricingRule(rule: PricingRule, index?: number): PricingRul
     return listPricingRules();
   }
   pricingRules.push(normalized);
+  return listPricingRules();
+}
+
+export function deletePricingRule(index: number): PricingRule[] {
+  if (!Number.isInteger(index) || index < 0 || index >= pricingRules.length) {
+    throw new Error('Pricing rule index is out of range.');
+  }
+  pricingRules.splice(index, 1);
   return listPricingRules();
 }
 
@@ -183,6 +224,14 @@ export function upsertSettlementAdjustmentRule(rule: SettlementAdjustmentRule, i
   }
 
   settlementAdjustmentRules.push(normalized);
+  return listSettlementAdjustmentRules();
+}
+
+export function deleteSettlementAdjustmentRule(index: number): SettlementAdjustmentRule[] {
+  if (!Number.isInteger(index) || index < 0 || index >= settlementAdjustmentRules.length) {
+    throw new Error('Settlement adjustment index is out of range.');
+  }
+  settlementAdjustmentRules.splice(index, 1);
   return listSettlementAdjustmentRules();
 }
 
@@ -330,7 +379,7 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
     });
   }
 
-  const totalAmount = roundCurrency(fees.reduce((sum, item) => sum + item.amount, 0));
+  const totalAmount = sumCurrency(fees.map((item) => item.amount));
   const waybillNo = `WB${Date.now().toString().slice(-8)}`;
 
   return {
@@ -479,7 +528,7 @@ export function buildDocumentWarnings(): DocumentWarning[] {
 }
 
 export function buildDashboardSummary() {
-  const revenue = roundCurrency(waybills.reduce((sum, item) => sum + item.totalAmount, 0));
+  const revenue = sumCurrency(waybills.map((item) => item.totalAmount));
   const carrierCost = roundCurrency(revenue * 0.84);
   const carrierGrossProfit = roundCurrency(revenue - carrierCost);
 
@@ -502,6 +551,7 @@ export function getReferenceData() {
     drivers,
     vehicles,
     pricingRules,
+    settlementAdjustmentRules,
   };
 }
 

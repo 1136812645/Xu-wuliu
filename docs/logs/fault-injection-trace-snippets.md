@@ -102,3 +102,28 @@ From .tmp/api-db.out.log:
 - waybill.created for WB999613635, WB002647519
 - waybill.signed for WB999613635
 - request.received path /api/mq/outbox/flush
+
+---
+
+## 6) 2026-07-08 one-click drill snippets
+
+Command:
+
+```bash
+node scripts/verify-fault-bug-mq-drill.mjs
+```
+
+Output highlights:
+
+- `mqBaseline.connected=false`（队列不可用基线成立）
+- `duplicateSignInjection.duplicateError.code=ER_DUP_ENTRY`
+- `feeCorruptionAndRepair.mismatchCountAfterCorrupt=1`
+- `feeCorruptionAndRepair.mismatchCountAfterRepair=0`
+- `mqIllegalPayloadRepairAndReplay.illegalCountAfterInject=1`
+- `mqIllegalPayloadRepairAndReplay.illegalCountAfterRepair=0`
+
+Meaning:
+
+- 脏数据可被系统化诊断接口识别并给出原因；
+- SQL 修复后故障计数回落为 0；
+- MQ 非法消息可被检测、订正并进入可重放流程。

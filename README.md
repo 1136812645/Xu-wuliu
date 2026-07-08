@@ -24,6 +24,40 @@ npm run dev:api
 npm run dev:web
 ```
 
+## 环境变量快速配置
+
+已提供模板文件：
+
+- `apps/api/.env.example`
+- `apps/web/.env.example`
+- `.env.example`（docker compose 变量）
+
+可直接复制：
+
+```bash
+cp apps/api/.env.example apps/api/.env
+cp apps/web/.env.example apps/web/.env
+cp .env.example .env
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item apps/api/.env.example apps/api/.env -Force
+Copy-Item apps/web/.env.example apps/web/.env -Force
+Copy-Item .env.example .env -Force
+```
+
+Google 登录至少需要在 `apps/api/.env` 配置：
+
+- `GOOGLE_CLIENT_ID`
+
+角色映射可选：
+
+- `GOOGLE_ADMIN_EMAILS`
+- `GOOGLE_CARRIER_EMAILS`
+- `GOOGLE_SHIPPER_EMAILS`
+
 - API 默认地址：http://localhost:3000
 - Web 默认地址：http://localhost:5173
 
@@ -108,6 +142,32 @@ curl -i http://127.0.0.1:18080/health
 - RabbitMQ 可靠消息链路（confirm 发布、重试队列、死信队列、消费去重）
 - Google 登录 / RBAC / Docker / 分布式部署方案说明
 
+## 第三方登录与权限控制
+
+已实现可交互的登录与权限控制链路：
+
+- 前端登录页：支持 Google 登录按钮（GIS）和开发模式登录
+- 后端登录接口：
+  - `GET /api/auth/config`
+  - `POST /api/auth/google`
+  - `POST /api/auth/dev-login`
+  - `GET /api/auth/me`
+  - `POST /api/auth/logout`
+- 会话方式：前端保存令牌并通过 `Authorization: Bearer <token>` 调用受保护接口
+- RBAC：后端对关键写操作做权限拦截（401/403），前端按权限禁用操作按钮
+
+### Google 登录配置
+
+在 API 进程环境变量中配置：
+
+- `GOOGLE_CLIENT_ID`：Google OAuth Client ID（必填，才能启用 Google 真登录）
+- `GOOGLE_ADMIN_EMAILS`：管理员邮箱列表（逗号分隔）
+- `GOOGLE_CARRIER_EMAILS`：承运商角色邮箱列表（逗号分隔）
+- `GOOGLE_SHIPPER_EMAILS`：货主角色邮箱列表（逗号分隔）
+- `DEV_LOGIN_ENABLED`：开发登录开关，默认开启，设为 `0` 关闭
+
+未配置 `GOOGLE_CLIENT_ID` 时，前端不会渲染 Google 真登录按钮，可使用开发模式登录验证全流程。
+
 ## MQ 验收辅助接口
 
 - `GET /api/mq/status`：查看 MQ 连接状态、队列配置、消费统计、outbox 状态
@@ -144,6 +204,30 @@ Redis 缓存观测接口：
 - `GET /api/pricing-rules` 查看当前生效规则（DB可用时读取表数据）
 - `POST /api/pricing-rules` 内存规则快速微调（便于演示与快速迭代）
 - `POST /api/pricing-rules/reload` 从 `pricing_rule` 表重载规则到运行态
+
+## 结算规则微调与配置解耦
+
+已实现“结算逻辑与业务配置解耦”设计：
+
+- 核心计算主流程统一由 `calculateFees` 执行，不因业务规则变化而改动主流程代码
+- 阶梯运价从 `pricing_rule` 配置表读取
+- 装卸费项 / 扣款类型从 `settlement_adjustment_rule` 配置表读取
+- 管理员在前端“结算规则”页即可直接修改并保存配置
+- 配置保存后，新建运单自动使用最新规则，无需改动核心计算逻辑
+
+管理员修改步骤：
+
+1. 使用 `ADMIN` 角色登录后台
+2. 进入“结算规则”页面
+3. 在“阶梯运价编辑”区域直接修改单价 / 装卸费 / 保费率并点击“保存”
+4. 在“装卸费 / 扣款规则配置”区域新增规则编码、规则名称、分类、模式、规则值、适用货主/车型后点击“新增”
+5. 返回运单中心新建运单，系统会自动按新配置计算费用
+
+对应能力：
+
+- 临时修改阶梯运价：修改 `pricing_rule`
+- 新增装卸费项：新增 `settlement_adjustment_rule` 且 `category=LOADING`
+- 新增扣款类型：新增 `settlement_adjustment_rule` 且 `category=DEDUCTION`
 
 调试日志留存：
 

@@ -116,6 +116,24 @@ export const pricingRules: PricingRule[] = [
     loadingFee: 120,
     insuranceRate: 0.01,
   },
+  {
+    shipperId: 'shipper-2',
+    truckType: '9.6M',
+    minMileageKm: 0,
+    maxMileageKm: 300,
+    unitPricePerKm: 8.1,
+    loadingFee: 170,
+    insuranceRate: 0.011,
+  },
+  {
+    shipperId: 'shipper-2',
+    truckType: '9.6M',
+    minMileageKm: 301,
+    maxMileageKm: 2000,
+    unitPricePerKm: 7.5,
+    loadingFee: 170,
+    insuranceRate: 0.011,
+  },
 ];
 
 export const settlementAdjustmentRules: SettlementAdjustmentRule[] = [];

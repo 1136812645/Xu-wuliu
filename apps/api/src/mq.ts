@@ -267,11 +267,11 @@ async function publishToExchange(event: WaybillEvent): Promise<void> {
 }
 
 async function routeToRetry(message: ConsumeMessage, retryCount: number): Promise<void> {
-  if (!consumeChannel) {
-    throw new Error('MQ consumer unavailable.');
+  if (!publishChannel) {
+    throw new Error('MQ publisher unavailable for retry routing.');
   }
 
-  consumeChannel.publish(RETRY_EXCHANGE, RETRY_ROUTING_KEY, message.content, {
+  await publishChannel.publish(RETRY_EXCHANGE, RETRY_ROUTING_KEY, message.content, {
     contentType: message.properties.contentType,
     deliveryMode: 2,
     messageId: message.properties.messageId,
@@ -280,6 +280,7 @@ async function routeToRetry(message: ConsumeMessage, retryCount: number): Promis
       'x-retry-count': retryCount,
     },
   });
+  await publishChannel.waitForConfirms();
 }
 
 function parseEvent(message: ConsumeMessage): WaybillEvent {

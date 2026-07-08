@@ -21,7 +21,7 @@
 - 消息重发
 - 数据订正方案
 
-## 2. 环境与基线
+## 2. 环境与基线 
 
 - API: http://127.0.0.1:3000
 - DB: waybill_admin
@@ -181,3 +181,70 @@ INSERT INTO outbox_event (... payload=JSON_OBJECT('foo','bar'), publish_status='
 
 - 证据摘录: docs/logs/fault-injection-trace-snippets.md
 - 可复用 SQL: scripts/sql/fault-repair-playbook.sql
+
+---
+
+## 补充验收（2026-07-08）
+
+### A. 本轮代码完善
+
+1. 新增系统化故障诊断接口（系统可直接提示故障原因）:
+  - `GET /api/faults/diagnostics`（需 `report:view` 权限）
+  - 输出两类故障原因：
+    - `feeMismatch`：`waybill.total_amount` 与 `SUM(waybill_fee_detail.amount)` 不一致
+    - `illegalOutboxPayload`：`eventId/waybillNo/operation` 缺失
+  - 文件：`apps/api/src/index.ts`
+
+2. 新增一键故障演练脚本：
+  - `scripts/verify-fault-bug-mq-drill.mjs`
+  - 覆盖流程：
+    - 脏数据注入（重复签收、错误金额）
+    - 日志/诊断定位
+    - SQL 修复与数据订正
+    - MQ 非法消息注入与订正
+    - outbox 重发
+
+### B. 本轮演练执行
+
+执行命令：
+
+```bash
+BASE_URL=http://127.0.0.1:3100 \
+DB_HOST=127.0.0.1 DB_PORT=13306 DB_USER=root DB_PASSWORD=root DB_NAME=waybill_admin \
+VEHICLE_ID=vehicle-3 SHIPPER_ID=shipper-1 CARRIER_ID=carrier-1 \
+node scripts/verify-fault-bug-mq-drill.mjs
+```
+
+关键结果（节选）：
+
+1. 重复签收脏数据注入：
+  - DB 返回：`ER_DUP_ENTRY`
+  - message：`Duplicate entry 'WB009469849-SIGN' for key 'waybill_operation_log.uk_waybill_operation'`
+
+2. 错误运费金额注入：
+  - 注入后：`mismatchCountAfterCorrupt = 1`
+  - 修复后：`mismatchCountAfterRepair = 0`
+
+3. MQ 队列不可用模拟：
+  - `connectedBefore = false`
+  - 创建运单仍成功（业务不中断）
+  - `publishFailedAfterCreate` 上升（故障可观测）
+
+4. MQ 非法消息注入与订正：
+  - 注入后：`illegalCountAfterInject = 1`
+  - 订正后：`illegalCountAfterRepair = 0`
+  - 执行 `POST /api/mq/outbox/flush` 获取重放结果
+
+### C. 本轮完整处理流程（可复用）
+
+1. 注入故障（重复签收 / 错误金额 / 非法消息）
+2. 调用 `/api/faults/diagnostics` 获取原因与样例
+3. 执行 SQL 修复（金额恢复、payload 字段补齐）
+4. 调用 `/api/mq/outbox/flush` 进行消息重放
+5. 再次调用 `/api/faults/diagnostics` 复核故障归零
+
+### D. 本轮结论
+
+- 满足“手工构造脏数据后系统可提示故障原因”要求。
+- 满足“构造 MQ 故障（队列不可用 + 非法消息）并输出完整处理流程”要求。
+- 已形成可重复执行的标准化流程：日志定位、SQL 修复、消息重发、数据订正。

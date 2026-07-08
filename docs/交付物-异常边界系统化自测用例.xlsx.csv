@@ -1,0 +1,26 @@
+用例集,用例ID,一级分类,二级分类,用例标题,前置条件,测试步骤,输入数据重点,预期结果,自动化状态,证据来源,优先级
+异常边界系统化自测,DELIV-BIZ-001,业务边界,零里程,零里程报价与开单,存在有效货主/承运商/车辆,1)调用报价 2)调用创建,mileageKm=0,报价200且干线费为0;开单成功且无500,已自动化,scripts/verify-boundary-fee-cases.ps1,P0
+异常边界系统化自测,DELIV-BIZ-002,业务边界,零运费,零运费创建验证,存在可命中零运费组合,1)调用报价 2)调用创建,"mileageKm=0;extraLoadingFee=-120;subsidy=0;deduction=0",总费用=0且费用项正确;无500,已自动化,scripts/verify-boundary-fee-cases.ps1,P0
+异常边界系统化自测,DELIV-BIZ-003,业务边界,负数补贴,负补贴金额核算,基础资料存在,1)报价 2)创建,"subsidy=-20",补贴项为负值并正确参与总价;无重复扣款,已自动化,scripts/verify-boundary-fee-cases.ps1,P0
+异常边界系统化自测,DELIV-BIZ-004,业务边界,空运单,空运单拦截,无,1)goodsName空白报价 2)goodsName空白创建,goodsName='   ',接口返回400且message明确;不入库,已自动化,scripts/verify-boundary-fee-cases.ps1,P0
+异常边界系统化自测,DELIV-BIZ-005,业务边界,超限货物,超重拦截,选择小车型,1)报价 2)尝试创建,weightKg>maxWeightKg,返回CAPACITY_EXCEEDED且提示超限值,已自动化,scripts/verify-capacity-split.ps1,P0
+异常边界系统化自测,DELIV-BIZ-006,业务边界,超限货物,超体积拦截,选择小车型,1)报价 2)尝试创建,volumeM3>maxVolumeM3,返回CAPACITY_EXCEEDED且提示超限值,已自动化,scripts/verify-capacity-split.ps1,P0
+异常边界系统化自测,DELIV-BIZ-007,业务边界,超限货物,双约束同时超限,选择小车型,1)报价 2)尝试创建,"weightKg/volumeM3同时超限",suggestedSplitCount合理且无脏写,已自动化,apps/api/src/capacity-acceptance.test.ts,P1
+异常边界系统化自测,DELIV-IDEM-001,幂等边界,重复签收,重复签收同幂等键,运单状态可签收,连续签收2次,同x-idempotency-key,首次成功第二次幂等拦截;状态不重复变更,已自动化,apps/api/src/index.ts + scripts,P0
+异常边界系统化自测,DELIV-IDEM-002,幂等边界,重复签收,重复签收不同幂等键,运单已签收,再次签收,不同key,返回已签收拦截且无重复写库,已自动化,apps/api/src/index.ts,P0
+异常边界系统化自测,DELIV-IDEM-003,幂等边界,重复回单上传,重复上传同幂等键,运单已签收,连续上传回单2次,同x-idempotency-key,首次成功第二次幂等拦截,已自动化,apps/api/src/index.ts,P0
+异常边界系统化自测,DELIV-IDEM-004,幂等边界,重复回单上传,重复上传不同幂等键,运单已上传回单,再次上传,不同key,返回已上传拦截且不重复写库,已自动化,apps/api/src/index.ts,P0
+异常边界系统化自测,DELIV-CON-001,并发边界,并发开单,50线程同车并发创建,车辆空闲,50线程并发POST/api/waybills,不同key同vehicleId,created=1/conflict=49;无500;运单增量=1,已自动化,scripts/verify-concurrent-waybill.mjs,P0
+异常边界系统化自测,DELIV-CON-002,并发边界,并发开单,200线程同车并发创建,车辆空闲,200线程并发POST/api/waybills,不同key同vehicleId,created=1/conflict=199;无500;运单增量=1,已自动化,scripts/verify-concurrent-waybill.mjs,P0
+异常边界系统化自测,DELIV-CON-003,并发边界,并发修改同车,并发修改同一车辆档案,存在vehicleId,50线程并发PUT/api/archives/vehicles/:id,不同payload同vehicleId,无500且最终状态可解释无字段错乱,待补自动化,docs/自测用例-异常边界清单.md,P0
+异常边界系统化自测,DELIV-CON-004,并发边界,混合并发,并发开单+并发改同车,同一vehicleId可用,创建请求与车辆PUT并发,同一vehicleId,错误码可控且无数据库错乱,待补自动化,docs/自测用例清单.md,P1
+异常边界系统化自测,DELIV-MQ-001,MQ异常,消息丢失,MQ下线时创建运单,可创建运单,1)停MQ 2)创建运单 3)看outbox,正常开单请求,业务成功且outbox有待补偿记录,已自动化,MQ 可靠投递、重复消费、死信队列验收报告.md,P0
+异常边界系统化自测,DELIV-MQ-002,MQ异常,重复消息,重复eventId消费去重,消费端在线,重复投递同eventId,同eventId,业务只执行一次;inbox_event去重生效,已自动化,MQ 可靠投递、重复消费、死信队列验收报告.md,P0
+异常边界系统化自测,DELIV-MQ-003,MQ异常,死信消息,非法消息进入死信,队列在线,投递非法消息,缺失关键字段,消息进入DLQ且主流程不阻塞,已自动化,MQ 可靠投递、重复消费、死信队列验收报告.md,P0
+异常边界系统化自测,DELIV-MQ-004,MQ异常,重试到死信,消费异常重试后DLQ,可注入消费异常,投递触发异常消息,重试超限输入,按重试策略进入DLQ,已自动化,MQ 可靠投递、重复消费、死信队列验收报告.md,P1
+异常边界系统化自测,DELIV-MQ-005,MQ异常,补偿发送,outbox补偿发送,存在outbox堆积,恢复MQ后调用flush,POST/api/mq/outbox/flush,补发成功且状态转PUBLISHED,已自动化,MQ 可靠投递、重复消费、死信队列验收报告.md,P0
+异常边界系统化自测,DELIV-ARC-001,档案边界,证件过期,驾驶证或道路证过期预警,存在过期样本,查询预警列表,expiry<today,返回EXPIRED,已自动化,apps/api/src/logic.ts + docs,P0
+异常边界系统化自测,DELIV-ARC-002,档案边界,证件空白,证件空白值处理,存在空白样本,查询预警列表,空字符串/null,返回INVALID或明确错误且无500,已自动化,apps/api/src/logic.ts + docs,P0
+异常边界系统化自测,DELIV-ARC-003,档案边界,非法日期,非法日期处理,存在invalid-date样本,查询预警列表,invalid-date,返回INVALID且页面不崩溃,已自动化,apps/web/src/App.tsx + docs,P0
+异常边界系统化自测,DELIV-ARC-004,档案边界,多状态筛选,过期/非法筛选准确性,有多状态样本,按状态筛选,EXPIRED/INVALID,返回结果与状态一致无漏错,已自动化,docs/车辆载重 + 体积双约束与超量拆分验收报告.md,P1
+异常边界系统化自测,DELIV-COM-001,综合校验,覆盖性,五大类覆盖率核验,已有用例台账,执行覆盖性检查脚本,全部台账,五大类均>=1且P0完整,已自动化,scripts/verify-exception-testcase-coverage.mjs,P0

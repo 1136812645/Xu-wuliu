@@ -227,9 +227,49 @@ input {
   background: rgba(255, 255, 255, 0.04);
 }
 
+.cache-board-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.cache-board-grid article {
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(247, 242, 232, 0.08);
+}
+
+.cache-board-grid .cache-wide {
+  grid-column: 1 / -1;
+}
+
+.cache-board-grid p {
+  margin: 6px 0 0;
+  color: rgba(247, 242, 232, 0.78);
+}
+
 .warning-item.expired { border: 1px solid rgba(255, 99, 99, 0.45); }
 .warning-item.expiring_soon { border: 1px solid rgba(255, 99, 99, 0.45); }
 .warning-item.invalid { border: 1px solid rgba(120, 174, 255, 0.45); }
+
+.warning-row-red td {
+  background: rgba(255, 99, 99, 0.08);
+}
+
+.warning-status-text {
+  color: rgba(247, 242, 232, 0.8);
+  display: inline-block;
+}
+
+.warning-status-text.alert {
+  color: #ff9d9d;
+  font-weight: 700;
+}
+
+.warning-status-text.invalid {
+  color: #8ec5ff;
+}
 
 .filter-row {
   display: flex;
@@ -296,10 +336,50 @@ input {
   overflow: hidden;
 }
 
+.import-progress-row {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  color: rgba(247, 242, 232, 0.84);
+}
+
+.import-report-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.import-report-grid article {
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(247, 242, 232, 0.08);
+}
+
+.import-report-grid p {
+  margin: 8px 0 0;
+}
+
+.pagination-row {
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: rgba(247, 242, 232, 0.82);
+}
+
+.pagination-row .filter-row {
+  margin-bottom: 0;
+}
+
 @media (max-width: 1200px) {
   .metric-grid,
   .reference-grid,
-  .arch-grid {
+  .arch-grid,
+  .import-report-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -319,8 +399,10 @@ input {
   .metric-grid,
   .reference-grid,
   .arch-grid,
+  .cache-board-grid,
   .role-grid,
-  .form-grid {
+  .form-grid,
+  .import-report-grid {
     grid-template-columns: 1fr;
   }
 

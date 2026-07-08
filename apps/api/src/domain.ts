@@ -44,6 +44,7 @@ export interface VehicleProfile {
 }
 
 export interface PricingRule {
+  id?: number;
   shipperId: string;
   truckType: VehicleProfile['truckType'];
   minMileageKm: number;
@@ -58,6 +59,7 @@ export type SettlementAdjustmentCategory = 'LOADING' | 'DEDUCTION';
 export type SettlementAdjustmentMode = 'FIXED' | 'LINE_HAUL_RATE';
 
 export interface SettlementAdjustmentRule {
+  id?: number;
   code: string;
   label: string;
   category: SettlementAdjustmentCategory;

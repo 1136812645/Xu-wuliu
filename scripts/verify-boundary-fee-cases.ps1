@@ -1,29 +1,47 @@
-function Complete-Waybill($waybillId) {
+function Get-AdminToken() {
+  return (
+    Invoke-RestMethod -Uri 'http://localhost:3000/api/auth/dev-login' -Method Post -ContentType 'application/json' -Body (
+      @{ email = 'admin@example.com'; name = 'Admin User'; role = 'ADMIN' } | ConvertTo-Json
+    )
+  ).token
+}
+
+function Get-CarrierToken() {
+  return (
+    Invoke-RestMethod -Uri 'http://localhost:3000/api/auth/dev-login' -Method Post -ContentType 'application/json' -Body (
+      @{ email = 'carrier@example.com'; name = 'Carrier User'; role = 'CARRIER' } | ConvertTo-Json
+    )
+  ).token
+}
+
+function Complete-Waybill($waybillId, $adminToken, $carrierToken) {
   try {
     $k1 = "bdr-sign-$([guid]::NewGuid().ToString('N'))"
-    Invoke-RestMethod -Uri ("http://localhost:3000/api/waybills/{0}/sign" -f $waybillId) -Method Post -Headers @{ 'x-idempotency-key' = $k1 } -ContentType 'application/json' -Body '{}' | Out-Null
+    Invoke-RestMethod -Uri ("http://localhost:3000/api/waybills/{0}/sign" -f $waybillId) -Method Post -Headers @{ Authorization = "Bearer $adminToken"; 'x-idempotency-key' = $k1 } -ContentType 'application/json' -Body '{}' | Out-Null
   } catch {}
 
   try {
     $k2 = "bdr-pod-$([guid]::NewGuid().ToString('N'))"
-    Invoke-RestMethod -Uri ("http://localhost:3000/api/waybills/{0}/upload-pod" -f $waybillId) -Method Post -Headers @{ 'x-idempotency-key' = $k2 } -ContentType 'application/json' -Body '{}' | Out-Null
+    Invoke-RestMethod -Uri ("http://localhost:3000/api/waybills/{0}/upload-pod" -f $waybillId) -Method Post -Headers @{ Authorization = "Bearer $carrierToken"; 'x-idempotency-key' = $k2 } -ContentType 'application/json' -Body '{}' | Out-Null
   } catch {}
 }
 
-function CleanupVehicle($vehicleId) {
-  $list = Invoke-RestMethod -Uri 'http://localhost:3000/api/waybills' -Method Get
+function CleanupVehicle($vehicleId, $adminToken, $carrierToken) {
+  $list = Invoke-RestMethod -Uri 'http://localhost:3000/api/waybills' -Method Get -Headers @{ Authorization = "Bearer $adminToken" }
   $active = $list.items | Where-Object {
     $_.vehicleId -eq $vehicleId -and (
       $_.status -eq 'ASSIGNED' -or $_.status -eq 'PICKED_UP' -or $_.status -eq 'IN_TRANSIT' -or $_.status -eq 'SIGNED'
     )
   }
   foreach ($w in $active) {
-    Complete-Waybill $w.id
+    Complete-Waybill $w.id $adminToken $carrierToken
   }
 }
 
 $vehicle = 'vehicle-2'
-CleanupVehicle $vehicle
+$adminToken = Get-AdminToken
+$carrierToken = Get-CarrierToken
+CleanupVehicle $vehicle $adminToken $carrierToken
 
 $cases = @(
   [PSCustomObject]@{
@@ -91,7 +109,7 @@ $cases = @(
 $results = @()
 
 foreach ($c in $cases) {
-  CleanupVehicle $vehicle
+  CleanupVehicle $vehicle $adminToken $carrierToken
   $body = $c.payload | ConvertTo-Json
 
   $quoteStatus = 0
@@ -101,14 +119,23 @@ foreach ($c in $cases) {
     $quoteStatus = [int]$q.StatusCode
     $quoteBody = $q.Content | ConvertFrom-Json
   } catch {
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+      try {
+        $quoteBody = ConvertFrom-Json $_.ErrorDetails.Message
+      } catch {
+        $quoteBody = @{ message = $_.ErrorDetails.Message }
+      }
+    }
     if ($_.Exception.Response) {
       $quoteStatus = [int]$_.Exception.Response.StatusCode
       $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
       $raw = $reader.ReadToEnd()
-      if ($raw.StartsWith('{')) {
-        try { $quoteBody = $raw | ConvertFrom-Json } catch { $quoteBody = $raw }
-      } else {
-        $quoteBody = $raw
+      if (-not $quoteBody) {
+        if ($raw.StartsWith('{')) {
+          try { $quoteBody = $raw | ConvertFrom-Json } catch { $quoteBody = @{ message = $raw } }
+        } else {
+          $quoteBody = @{ message = $raw }
+        }
       }
     }
   }
@@ -117,24 +144,33 @@ foreach ($c in $cases) {
   $createBody = $null
   try {
     $k = "bdr-create-$($c.name)-$([guid]::NewGuid().ToString('N'))"
-    $cr = Invoke-WebRequest -Uri 'http://localhost:3000/api/waybills' -Method Post -Headers @{ 'x-idempotency-key' = $k } -ContentType 'application/json' -Body $body
+    $cr = Invoke-WebRequest -Uri 'http://localhost:3000/api/waybills' -Method Post -Headers @{ Authorization = "Bearer $adminToken"; 'x-idempotency-key' = $k } -ContentType 'application/json' -Body $body
     $createStatus = [int]$cr.StatusCode
     $createBody = $cr.Content | ConvertFrom-Json
   } catch {
+    if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
+      try {
+        $createBody = ConvertFrom-Json $_.ErrorDetails.Message
+      } catch {
+        $createBody = @{ message = $_.ErrorDetails.Message }
+      }
+    }
     if ($_.Exception.Response) {
       $createStatus = [int]$_.Exception.Response.StatusCode
       $reader = New-Object System.IO.StreamReader($_.Exception.Response.GetResponseStream())
       $raw = $reader.ReadToEnd()
-      if ($raw.StartsWith('{')) {
-        try { $createBody = $raw | ConvertFrom-Json } catch { $createBody = $raw }
-      } else {
-        $createBody = $raw
+      if (-not $createBody) {
+        if ($raw.StartsWith('{')) {
+          try { $createBody = $raw | ConvertFrom-Json } catch { $createBody = @{ message = $raw } }
+        } else {
+          $createBody = @{ message = $raw }
+        }
       }
     }
   }
 
   if ($createStatus -eq 201 -and $createBody.id) {
-    Complete-Waybill $createBody.id
+    Complete-Waybill $createBody.id $adminToken $carrierToken
   }
 
   $lineHaul = $null

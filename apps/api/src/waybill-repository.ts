@@ -1,9 +1,36 @@
-import type { RowDataPacket } from 'mysql2/promise';
-import { dbQuery, withDbConnection } from './db.js';
-import type { FeeComponent, PricingRule, WaybillDraft, WaybillRecord } from './domain.js';
-import { calculateFees, replacePricingRules, resolveShardTable } from './logic.js';
+import type { PoolConnection, RowDataPacket } from 'mysql2/promise';
+import { dbExecute, dbQuery, withDbConnection } from './db.js';
+import type { FeeComponent, PricingRule, SettlementAdjustmentRule, WaybillDraft, WaybillRecord } from './domain.js';
+import { calculateFees, replacePricingRules, replaceSettlementAdjustmentRules, resolveShardTable } from './logic.js';
 
 const CREATE_OPERATION = 'CREATE';
+
+type TransitionBlockedReason =
+  | 'IDEMPOTENCY_KEY_HIT'
+  | 'ALREADY_SIGNED'
+  | 'ALREADY_POD_UPLOADED'
+  | 'UNIQUE_CONSTRAINT_HIT';
+
+export interface TransitionWaybillResult {
+  waybill: WaybillRecord;
+  idempotentBlocked: boolean;
+  reason?: TransitionBlockedReason;
+}
+
+export interface WaybillImportRow extends WaybillDraft {
+  idempotencyKey?: string;
+}
+
+export interface WaybillBatchImportResult {
+  created: number;
+  failed: number;
+  errors: string[];
+}
+
+async function syncSettlementRulesForDbFeeCalculation(): Promise<void> {
+  await replacePricingRulesFromDb();
+  await replaceSettlementAdjustmentRulesFromDb();
+}
 
 interface ShardConfigRow extends RowDataPacket {
   shard_count: number;
@@ -35,6 +62,7 @@ interface FeeRow extends RowDataPacket {
 }
 
 interface PricingRuleRow extends RowDataPacket {
+  id: number;
   shipper_id: string;
   truck_type: '4.2M' | '6.8M' | '9.6M' | '17.5M';
   min_mileage_km: number;
@@ -42,6 +70,18 @@ interface PricingRuleRow extends RowDataPacket {
   unit_price_per_km: number;
   loading_fee: number;
   insurance_rate: number;
+}
+
+interface SettlementAdjustmentRuleRow extends RowDataPacket {
+  id: number;
+  code: string;
+  label: string;
+  category: 'LOADING' | 'DEDUCTION';
+  mode: 'FIXED' | 'LINE_HAUL_RATE';
+  value: number;
+  enabled: number;
+  shipper_id: string | null;
+  truck_type: '4.2M' | '6.8M' | '9.6M' | '17.5M' | null;
 }
 
 function toIso(value: Date | string | null): string | undefined {
@@ -60,6 +100,15 @@ function safeShardTable(table: string): string {
     throw new Error(`Unsafe shard table: ${table}`);
   }
   return table;
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const candidate = error as { code?: string };
+  return candidate.code === 'ER_DUP_ENTRY';
 }
 
 async function getShardCount(month: string): Promise<number> {
@@ -89,6 +138,236 @@ function monthFromDate(date: Date): string {
  */
 function routeTable(waybillNo: string, now: Date, shardCount: number): string {
   return safeShardTable(resolveShardTable(waybillNo, now, shardCount));
+}
+
+let batchWaybillSeq = 0;
+
+function nextBatchWaybillNo(now: Date): string {
+  batchWaybillSeq = (batchWaybillSeq + 1) % 1_000_000;
+  const ts = now.getTime().toString().slice(-8);
+  const seq = String(batchWaybillSeq).padStart(6, '0');
+  return `WB${ts}${seq}`;
+}
+
+function pushBoundedError(target: string[], message: string): void {
+  if (target.length < 5) {
+    target.push(message);
+  }
+}
+
+async function insertWaybillRowsBatch(
+  conn: PoolConnection,
+  table: string,
+  rows: Array<{ waybillNo: string; draft: WaybillDraft; totalAmount: number; now: Date }>,
+): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const valuesSql = rows
+    .map(() => '(?, ?, ?, ?, ?, ?, ?, ?, \"ASSIGNED\", ?, ?)')
+    .join(', ');
+  const params = rows.flatMap((item) => [
+    item.waybillNo,
+    item.draft.shipperId,
+    item.draft.carrierId,
+    item.draft.vehicleId,
+    item.draft.mileageKm,
+    item.draft.weightKg,
+    item.draft.volumeM3,
+    item.draft.goodsName,
+    item.totalAmount,
+    item.now,
+  ]);
+
+  await conn.query(
+    `INSERT INTO ${safeShardTable(table)} (
+      waybill_no, shipper_id, carrier_id, vehicle_id,
+      mileage_km, weight_kg, volume_m3, goods_name,
+      status, total_amount, created_at
+    ) VALUES ${valuesSql}`,
+    params,
+  );
+}
+
+async function insertFeeRowsBatch(
+  conn: PoolConnection,
+  rows: Array<{ waybillNo: string; fees: FeeComponent[] }>,
+): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const feeInserts: Array<[string, string, string, number, string]> = [];
+  for (const row of rows) {
+    for (const fee of row.fees) {
+      feeInserts.push([row.waybillNo, fee.type, fee.label, fee.amount, fee.formula]);
+    }
+  }
+
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < feeInserts.length; i += BATCH_SIZE) {
+    const batch = feeInserts.slice(i, i + BATCH_SIZE);
+    const valuesSql = batch.map(() => '(?, ?, ?, ?, ?)').join(', ');
+    const params = batch.flatMap((item) => item);
+    await conn.query(
+      `INSERT INTO waybill_fee_detail (waybill_no, fee_type, fee_label, amount, formula_snapshot)
+       VALUES ${valuesSql}`,
+      params,
+    );
+  }
+}
+
+async function insertOperationRowsBatch(
+  conn: PoolConnection,
+  rows: Array<{ waybillNo: string; idempotencyKey: string }>,
+): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
+
+  const BATCH_SIZE = 1000;
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE);
+    const valuesSql = batch.map(() => '(?, ?, ?, JSON_OBJECT(\"status\", \"ASSIGNED\"))').join(', ');
+    const params = batch.flatMap((item) => [item.waybillNo, CREATE_OPERATION, item.idempotencyKey]);
+    await conn.query(
+      `INSERT INTO waybill_operation_log (waybill_no, operation_type, idempotency_key, operation_result)
+       VALUES ${valuesSql}`,
+      params,
+    );
+  }
+}
+
+async function findExistingCreateIdempotencyKeys(keys: string[]): Promise<Set<string>> {
+  if (keys.length === 0) {
+    return new Set<string>();
+  }
+
+  const existing = new Set<string>();
+  const batchSize = 1000;
+  for (let i = 0; i < keys.length; i += batchSize) {
+    const batch = keys.slice(i, i + batchSize);
+    const placeholders = batch.map(() => '?').join(',');
+    const rows = await dbQuery<RowDataPacket[]>(
+      `SELECT idempotency_key
+       FROM waybill_operation_log
+       WHERE operation_type = ?
+         AND idempotency_key IN (${placeholders})`,
+      [CREATE_OPERATION, ...batch],
+    );
+
+    for (const row of rows) {
+      existing.add(String(row.idempotency_key));
+    }
+  }
+
+  return existing;
+}
+
+export async function importWaybillChunkInDb(
+  rows: WaybillImportRow[],
+  importBatchId: string,
+): Promise<WaybillBatchImportResult> {
+  if (rows.length === 0) {
+    return { created: 0, failed: 0, errors: [] };
+  }
+
+  await syncSettlementRulesForDbFeeCalculation();
+
+  const now = new Date();
+  const month = monthFromDate(now);
+  const shardCount = await getShardCount(month);
+  const rowInputs = rows.map((row, index) => ({
+    row,
+    idempotencyKey: row.idempotencyKey ?? `${importBatchId}:${index + 1}`,
+  }));
+  const existingIdempotencyKeys = await findExistingCreateIdempotencyKeys(rowInputs.map((item) => item.idempotencyKey));
+
+  const prepared: Array<{
+    table: string;
+    waybillNo: string;
+    draft: WaybillDraft;
+    fees: FeeComponent[];
+    totalAmount: number;
+    idempotencyKey: string;
+  }> = [];
+  const errors: string[] = [];
+  let failed = 0;
+  let idempotentHits = 0;
+
+  for (let i = 0; i < rowInputs.length; i += 1) {
+    const { row, idempotencyKey } = rowInputs[i];
+    if (existingIdempotencyKeys.has(idempotencyKey)) {
+      idempotentHits += 1;
+      continue;
+    }
+
+    try {
+      const waybillNo = nextBatchWaybillNo(now);
+      const feeResult = calculateFees(row);
+      prepared.push({
+        table: routeTable(waybillNo, now, shardCount),
+        waybillNo,
+        draft: row,
+        fees: feeResult.fees,
+        totalAmount: feeResult.totalAmount,
+        idempotencyKey,
+      });
+    } catch (error) {
+      failed += 1;
+      pushBoundedError(errors, error instanceof Error ? error.message : 'Unknown error');
+    }
+  }
+
+  if (prepared.length === 0) {
+    return {
+      created: idempotentHits,
+      failed,
+      errors,
+    };
+  }
+
+  await withDbConnection(async (conn) => {
+    await conn.beginTransaction();
+    try {
+      const byTable = new Map<string, Array<{ waybillNo: string; draft: WaybillDraft; totalAmount: number; now: Date }>>();
+      for (const row of prepared) {
+        const list = byTable.get(row.table) ?? [];
+        list.push({
+          waybillNo: row.waybillNo,
+          draft: row.draft,
+          totalAmount: row.totalAmount,
+          now,
+        });
+        byTable.set(row.table, list);
+      }
+
+      for (const [table, tableRows] of byTable.entries()) {
+        await insertWaybillRowsBatch(conn, table, tableRows);
+      }
+
+      await insertFeeRowsBatch(
+        conn,
+        prepared.map((row) => ({ waybillNo: row.waybillNo, fees: row.fees })),
+      );
+      await insertOperationRowsBatch(
+        conn,
+        prepared.map((row) => ({ waybillNo: row.waybillNo, idempotencyKey: row.idempotencyKey })),
+      );
+
+      await conn.commit();
+    } catch (error) {
+      await conn.rollback();
+      throw error;
+    }
+  });
+
+  return {
+    created: prepared.length + idempotentHits,
+    failed,
+    errors,
+  };
 }
 
 function mapRowToWaybill(row: WaybillRow, fees: FeeComponent[]): WaybillRecord {
@@ -181,6 +460,7 @@ async function listShardTablesByMonth(month: string): Promise<string[]> {
  * @returns created or previously created waybill record.
  */
 export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: string): Promise<WaybillRecord> {
+  await syncSettlementRulesForDbFeeCalculation();
   const feeResult = calculateFees(draft);
   const now = new Date();
   const month = monthFromDate(now);
@@ -313,7 +593,7 @@ export async function transitionWaybillInDb(
   waybillId: string,
   action: 'SIGN' | 'UPLOAD_POD',
   idempotencyKey?: string,
-): Promise<WaybillRecord> {
+): Promise<TransitionWaybillResult> {
   const month = monthFromDate(new Date());
   const tables = await listShardTablesByMonth(month);
   const hit = await loadWaybillByNo(waybillId, tables);
@@ -341,11 +621,18 @@ export async function transitionWaybillInDb(
         if (!existing) {
           throw new Error('Waybill not found after idempotent hit.');
         }
-        return existing;
+        return {
+          waybill: existing,
+          idempotentBlocked: true,
+          reason: 'IDEMPOTENCY_KEY_HIT',
+        };
       }
 
+      let blockedReason: TransitionBlockedReason | undefined;
       if (action === 'SIGN') {
-        if (hit.status !== 'SIGNED' && hit.status !== 'POD_UPLOADED') {
+        if (hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
+          blockedReason = 'ALREADY_SIGNED';
+        } else {
           await conn.query(
             `UPDATE ${safeShardTable(hit.shardTable)}
              SET status = 'SIGNED', signed_at = NOW()
@@ -356,10 +643,11 @@ export async function transitionWaybillInDb(
       }
 
       if (action === 'UPLOAD_POD') {
-        if (hit.status !== 'SIGNED' && hit.status !== 'POD_UPLOADED') {
+        if (hit.status === 'POD_UPLOADED') {
+          blockedReason = 'ALREADY_POD_UPLOADED';
+        } else if (hit.status !== 'SIGNED') {
           throw new Error('Waybill must be signed before POD upload.');
-        }
-        if (hit.status !== 'POD_UPLOADED') {
+        } else {
           await conn.query(
             `UPDATE ${safeShardTable(hit.shardTable)}
              SET status = 'POD_UPLOADED', pod_uploaded_at = NOW()
@@ -367,6 +655,19 @@ export async function transitionWaybillInDb(
             [waybillId],
           );
         }
+      }
+
+      if (blockedReason) {
+        await conn.rollback();
+        const existing = await loadWaybillByNo(waybillId, tables);
+        if (!existing) {
+          throw new Error('Waybill not found after blocked transition.');
+        }
+        return {
+          waybill: existing,
+          idempotentBlocked: true,
+          reason: blockedReason,
+        };
       }
 
       await conn.query(
@@ -381,9 +682,23 @@ export async function transitionWaybillInDb(
       if (!updated) {
         throw new Error('Waybill not found after transition.');
       }
-      return updated;
+      return {
+        waybill: updated,
+        idempotentBlocked: false,
+      };
     } catch (error) {
       await conn.rollback();
+      if (isDuplicateKeyError(error)) {
+        const existing = await loadWaybillByNo(waybillId, tables);
+        if (!existing) {
+          throw new Error('Waybill not found after duplicate-key interception.');
+        }
+        return {
+          waybill: existing,
+          idempotentBlocked: true,
+          reason: 'UNIQUE_CONSTRAINT_HIT',
+        };
+      }
       throw error;
     }
   });
@@ -439,6 +754,7 @@ export async function hasActiveWaybillForVehicleInDb(vehicleId: string): Promise
 export async function listPricingRulesFromDb(): Promise<PricingRule[]> {
   const rows = await dbQuery<PricingRuleRow[]>(
     `SELECT
+      id,
       shipper_id,
       truck_type,
       min_mileage_km,
@@ -451,6 +767,7 @@ export async function listPricingRulesFromDb(): Promise<PricingRule[]> {
   );
 
   return rows.map((row) => ({
+    id: Number(row.id),
     shipperId: row.shipper_id,
     truckType: row.truck_type,
     minMileageKm: Number(row.min_mileage_km),
@@ -459,6 +776,150 @@ export async function listPricingRulesFromDb(): Promise<PricingRule[]> {
     loadingFee: Number(row.loading_fee),
     insuranceRate: Number(row.insurance_rate),
   }));
+}
+
+export async function upsertPricingRuleInDb(rule: PricingRule): Promise<PricingRule[]> {
+  if (typeof rule.id === 'number') {
+    await dbQuery(
+      `UPDATE pricing_rule
+       SET shipper_id = ?, truck_type = ?, min_mileage_km = ?, max_mileage_km = ?,
+           unit_price_per_km = ?, loading_fee = ?, insurance_rate = ?
+       WHERE id = ?`,
+      [
+        rule.shipperId,
+        rule.truckType,
+        rule.minMileageKm,
+        rule.maxMileageKm,
+        rule.unitPricePerKm,
+        rule.loadingFee,
+        rule.insuranceRate,
+        rule.id,
+      ],
+    );
+  } else {
+    await dbQuery(
+      `INSERT INTO pricing_rule (
+        shipper_id, truck_type, min_mileage_km, max_mileage_km,
+        unit_price_per_km, loading_fee, insurance_rate
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        rule.shipperId,
+        rule.truckType,
+        rule.minMileageKm,
+        rule.maxMileageKm,
+        rule.unitPricePerKm,
+        rule.loadingFee,
+        rule.insuranceRate,
+      ],
+    );
+  }
+
+  return replacePricingRulesFromDb();
+}
+
+export async function deletePricingRuleInDb(id: number): Promise<PricingRule[]> {
+  const result = await dbExecute(`DELETE FROM pricing_rule WHERE id = ?`, [id]);
+  if (result.affectedRows < 1) {
+    throw new Error('Pricing rule not found or already deleted.');
+  }
+  return replacePricingRulesFromDb();
+}
+
+export async function ensureSettlementAdjustmentRuleTable(): Promise<void> {
+  await dbQuery(
+    `CREATE TABLE IF NOT EXISTS settlement_adjustment_rule (
+      id BIGINT PRIMARY KEY AUTO_INCREMENT,
+      code VARCHAR(64) NOT NULL,
+      label VARCHAR(128) NOT NULL,
+      category ENUM('LOADING', 'DEDUCTION') NOT NULL,
+      mode ENUM('FIXED', 'LINE_HAUL_RATE') NOT NULL,
+      value DECIMAL(18,4) NOT NULL,
+      enabled TINYINT(1) NOT NULL DEFAULT 1,
+      shipper_id VARCHAR(64) NULL,
+      truck_type ENUM('4.2M', '6.8M', '9.6M', '17.5M') NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uk_settlement_adjustment_code (code),
+      KEY idx_settlement_adjustment_scope (shipper_id, truck_type, enabled)
+    )`,
+  );
+}
+
+export async function listSettlementAdjustmentRulesFromDb(): Promise<SettlementAdjustmentRule[]> {
+  await ensureSettlementAdjustmentRuleTable();
+  const rows = await dbQuery<SettlementAdjustmentRuleRow[]>(
+    `SELECT id, code, label, category, mode, value, enabled, shipper_id, truck_type
+     FROM settlement_adjustment_rule
+     ORDER BY category ASC, code ASC`,
+  );
+
+  return rows.map((row) => ({
+    id: Number(row.id),
+    code: row.code,
+    label: row.label,
+    category: row.category,
+    mode: row.mode,
+    value: Number(row.value),
+    enabled: Boolean(row.enabled),
+    shipperId: row.shipper_id ?? undefined,
+    truckType: row.truck_type ?? undefined,
+  }));
+}
+
+export async function replaceSettlementAdjustmentRulesFromDb(): Promise<SettlementAdjustmentRule[]> {
+  const rules = await listSettlementAdjustmentRulesFromDb();
+  replaceSettlementAdjustmentRules(rules);
+  return rules;
+}
+
+export async function upsertSettlementAdjustmentRuleInDb(rule: SettlementAdjustmentRule): Promise<SettlementAdjustmentRule[]> {
+  await ensureSettlementAdjustmentRuleTable();
+
+  if (typeof rule.id === 'number') {
+    await dbQuery(
+      `UPDATE settlement_adjustment_rule
+       SET code = ?, label = ?, category = ?, mode = ?, value = ?, enabled = ?, shipper_id = ?, truck_type = ?
+       WHERE id = ?`,
+      [
+        rule.code,
+        rule.label,
+        rule.category,
+        rule.mode,
+        rule.value,
+        rule.enabled ? 1 : 0,
+        rule.shipperId ?? null,
+        rule.truckType ?? null,
+        rule.id,
+      ],
+    );
+  } else {
+    await dbQuery(
+      `INSERT INTO settlement_adjustment_rule (
+        code, label, category, mode, value, enabled, shipper_id, truck_type
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        rule.code,
+        rule.label,
+        rule.category,
+        rule.mode,
+        rule.value,
+        rule.enabled ? 1 : 0,
+        rule.shipperId ?? null,
+        rule.truckType ?? null,
+      ],
+    );
+  }
+
+  return replaceSettlementAdjustmentRulesFromDb();
+}
+
+export async function deleteSettlementAdjustmentRuleInDb(id: number): Promise<SettlementAdjustmentRule[]> {
+  await ensureSettlementAdjustmentRuleTable();
+  const result = await dbExecute(`DELETE FROM settlement_adjustment_rule WHERE id = ?`, [id]);
+  if (result.affectedRows < 1) {
+    throw new Error('Settlement adjustment rule not found or already deleted.');
+  }
+  return replaceSettlementAdjustmentRulesFromDb();
 }
 
 export async function replacePricingRulesFromDb(): Promise<PricingRule[]> {

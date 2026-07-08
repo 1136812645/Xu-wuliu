@@ -63,6 +63,22 @@ CREATE TABLE IF NOT EXISTS pricing_rule (
   KEY idx_pricing_rule_lookup (shipper_id, truck_type, min_mileage_km, max_mileage_km)
 );
 
+CREATE TABLE IF NOT EXISTS settlement_adjustment_rule (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  code VARCHAR(64) NOT NULL,
+  label VARCHAR(128) NOT NULL,
+  category ENUM('LOADING', 'DEDUCTION') NOT NULL,
+  mode ENUM('FIXED', 'LINE_HAUL_RATE') NOT NULL,
+  value DECIMAL(18,4) NOT NULL,
+  enabled TINYINT(1) NOT NULL DEFAULT 1,
+  shipper_id VARCHAR(64) NULL,
+  truck_type ENUM('4.2M', '6.8M', '9.6M', '17.5M') NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_settlement_adjustment_code (code),
+  KEY idx_settlement_adjustment_scope (shipper_id, truck_type, enabled)
+);
+
 CREATE TABLE IF NOT EXISTS waybill_route_config (
   route_month CHAR(6) NOT NULL,
   shard_count INT NOT NULL,
@@ -178,4 +194,20 @@ CREATE TABLE IF NOT EXISTS outbox_event (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   UNIQUE KEY uk_outbox_event_id (event_id),
   KEY idx_outbox_status_time (publish_status, created_at)
+);
+
+CREATE TABLE IF NOT EXISTS auth_user (
+  id VARCHAR(64) PRIMARY KEY,
+  email VARCHAR(191) NOT NULL,
+  name VARCHAR(128) NOT NULL,
+  role ENUM('ADMIN', 'SHIPPER', 'CARRIER') NOT NULL DEFAULT 'SHIPPER',
+  password_hash VARCHAR(255) NULL,
+  google_sub VARCHAR(128) NULL,
+  picture_url VARCHAR(255) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  last_login_at DATETIME NULL,
+  UNIQUE KEY uk_auth_user_email (email),
+  UNIQUE KEY uk_auth_user_google_sub (google_sub),
+  KEY idx_auth_user_role (role)
 );

@@ -118,6 +118,82 @@ describe('waybill logic', () => {
     expect(result.totalAmount).toBe(100);
   });
 
+  it('supports zero freight scenario and keeps total at zero', () => {
+    const result = calculateFees({
+      ...baseDraft,
+      shipperId: 'shipper-2',
+      carrierId: 'carrier-2',
+      vehicleId: 'vehicle-2',
+      mileageKm: 0,
+      weightKg: 1000,
+      volumeM3: 2,
+      goodsName: 'zero-freight',
+      extraLoadingFee: -120,
+      subsidy: 0,
+      deduction: 0,
+    });
+
+    expect(result.fees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'LINE_HAUL', amount: 0 }),
+        expect.objectContaining({ type: 'LOADING', amount: 0 }),
+        expect.objectContaining({ type: 'INSURANCE', amount: 0 }),
+      ]),
+    );
+    expect(result.totalAmount).toBe(0);
+  });
+
+  it('keeps cent-level precision with mixed signs and no floating drift', () => {
+    const result = calculateFees({
+      ...baseDraft,
+      shipperId: 'shipper-2',
+      carrierId: 'carrier-2',
+      vehicleId: 'vehicle-2',
+      mileageKm: 10,
+      weightKg: 100,
+      volumeM3: 1,
+      goodsName: 'precision-check',
+      extraLoadingFee: 0.1,
+      subsidy: 0.2,
+      deduction: 0.3,
+    });
+
+    expect(result.fees).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'LINE_HAUL', amount: 69 }),
+        expect.objectContaining({ type: 'LOADING', amount: 120.1 }),
+        expect.objectContaining({ type: 'INSURANCE', amount: 0.69 }),
+        expect.objectContaining({ type: 'SUBSIDY', amount: 0.2 }),
+        expect.objectContaining({ type: 'DEDUCTION', amount: -0.3 }),
+      ]),
+    );
+    expect(result.totalAmount).toBe(189.69);
+  });
+
+  it('allows negative total waybill and preserves detailed fee items', () => {
+    const record = createWaybill(
+      {
+        ...baseDraft,
+        shipperId: 'shipper-2',
+        carrierId: 'carrier-2',
+        vehicleId: 'vehicle-2',
+        mileageKm: 0,
+        weightKg: 100,
+        volumeM3: 1,
+        goodsName: 'negative-total',
+        extraLoadingFee: 0,
+        subsidy: 0,
+        deduction: 180,
+      },
+      'idem-negative-total',
+    );
+
+    expect(record.totalAmount).toBe(-60);
+    expect(record.fees).toHaveLength(5);
+    expect(record.fees.find((item) => item.type === 'DEDUCTION')?.amount).toBe(-180);
+    expect(waybills[0].totalAmount).toBe(-60);
+  });
+
   it('rejects empty waybills', () => {
     expect(() => calculateFees({ ...baseDraft, goodsName: '   ' })).toThrow('Empty waybill is not allowed.');
   });
@@ -205,5 +281,13 @@ describe('waybill logic', () => {
   it('routes waybills to monthly shard tables', () => {
     const table = resolveShardTable('WB12345678', new Date('2026-07-06T00:00:00Z'));
     expect(table).toMatch(/^waybill_202607_[0-3]$/);
+  });
+
+  it('supports shard expansion by shardCount parameter', () => {
+    const table4 = resolveShardTable('WB00000005', new Date('2026-07-06T00:00:00Z'), 4);
+    const table8 = resolveShardTable('WB00000005', new Date('2026-07-06T00:00:00Z'), 8);
+
+    expect(table4).toBe('waybill_202607_1');
+    expect(table8).toBe('waybill_202607_5');
   });
 });
