@@ -67,7 +67,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const body = await response.json().catch(() => ({ message: 'Request failed.' }));
+    const raw = await response.text();
+    let body: {
+      message?: string;
+      issues?: Array<{ path?: string[]; message?: string }>;
+    } = { message: 'Request failed.' };
+    try {
+      body = raw ? JSON.parse(raw) : body;
+    } catch {
+      // Keep non-JSON server responses readable for troubleshooting.
+      body = { message: raw?.trim() || 'Request failed.' };
+    }
     const issueText = Array.isArray(body.issues)
       ? body.issues
           .map((issue: { path?: string[]; message?: string }) => {

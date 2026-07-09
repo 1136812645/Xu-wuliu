@@ -108,7 +108,7 @@ const instanceId = process.env.INSTANCE_ID ?? `api-${process.pid}`;
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '2mb' }));
 app.use((_req, res, next) => {
   res.setHeader('x-instance-id', instanceId);
   next();
