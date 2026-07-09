@@ -251,6 +251,7 @@ const I18N = {
     loginTitle: '账号登录',
     loginHint: '请先登录后再进行业务操作。',
     loginByGoogle: 'Google 登录',
+    googleNotConfigured: 'Google 登录未启用，请在服务端配置 GOOGLE_CLIENT_ID。',
     devLogin: '开发模式登录',
     passwordLogin: '账号密码登录',
     registerAccount: '注册账号',
@@ -438,6 +439,7 @@ const I18N = {
     loginTitle: 'Sign In',
     loginHint: 'Please sign in before operating business actions.',
     loginByGoogle: 'Google Sign In',
+    googleNotConfigured: 'Google sign-in is disabled. Configure GOOGLE_CLIENT_ID on the server.',
     devLogin: 'Dev Login',
     passwordLogin: 'Password Login',
     registerAccount: 'Register Account',
@@ -1649,7 +1651,9 @@ export function App() {
               <p>{t.loginByGoogle}</p>
               <div id="google-login-btn" />
             </>
-          ) : null}
+          ) : (
+            <p>{t.googleNotConfigured}</p>
+          )}
 
           {authConfig?.devLoginEnabled ? (
             <div className="panel-stack">

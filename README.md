@@ -52,6 +52,13 @@ Google 登录至少需要在 `apps/api/.env` 配置：
 
 - `GOOGLE_CLIENT_ID`
 
+使用 Docker Compose 启动时，请在根目录 `.env` 配置同名变量（compose 会注入到 `api-1` / `api-2`）：
+
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_ADMIN_EMAILS`
+- `GOOGLE_CARRIER_EMAILS`
+- `GOOGLE_SHIPPER_EMAILS`
+
 角色映射可选：
 
 - `GOOGLE_ADMIN_EMAILS`
