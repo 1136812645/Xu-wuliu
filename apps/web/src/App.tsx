@@ -1663,21 +1663,6 @@ export function App() {
                   />
                 </label>
                 <label>
-                  <span>{t.devRole}</span>
-                  <select
-                    value={registerForm.role}
-                    onChange={(event) =>
-                      setRegisterForm((current) => ({
-                        ...current,
-                        role: event.target.value as Extract<AuthUser['role'], 'SHIPPER' | 'CARRIER'>,
-                      }))
-                    }
-                  >
-                    <option value="SHIPPER">SHIPPER</option>
-                    <option value="CARRIER">CARRIER</option>
-                  </select>
-                </label>
-                <label>
                   <span>{t.password}</span>
                   <input
                     type="password"
@@ -1705,6 +1690,21 @@ export function App() {
                     value={registerForm.name}
                     onChange={(event) => setRegisterForm((current) => ({ ...current, name: event.target.value }))}
                   />
+                </label>
+                <label>
+                  <span>{t.devRole}</span>
+                  <select
+                    value={registerForm.role}
+                    onChange={(event) =>
+                      setRegisterForm((current) => ({
+                        ...current,
+                        role: event.target.value as Extract<AuthUser['role'], 'SHIPPER' | 'CARRIER'>,
+                      }))
+                    }
+                  >
+                    <option value="SHIPPER">SHIPPER</option>
+                    <option value="CARRIER">CARRIER</option>
+                  </select>
                 </label>
                 <label>
                   <span>{t.password}</span>
