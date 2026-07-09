@@ -593,6 +593,22 @@ export function App() {
     function can(permission) {
         return permissionSet.has(permission);
     }
+    function isUnauthorizedErrorMessage(message) {
+        const normalized = message.toLowerCase();
+        return normalized.includes('unauthorized') || normalized.includes('please login first');
+    }
+    function resetToLogin(message) {
+        setAuthToken(null);
+        setAuthUser(null);
+        setBootstrap(null);
+        setDashboard(null);
+        setWaybills([]);
+        setWarnings([]);
+        setCacheScenarios(null);
+        setLoadError('');
+        setAuthMessage(message);
+        setLoading(false);
+    }
     const navItems = useMemo(() => [
         { key: 'overview', label: t.navOverview, visible: can('dashboard:view') },
         { key: 'waybills', label: t.navWaybills, visible: can('waybill:view') },
@@ -630,8 +646,15 @@ export function App() {
                         setAuthUser(me.user);
                     }
                 }
-                catch {
-                    setAuthUser(null);
+                catch (error) {
+                    if (!cancelled) {
+                        const message = error instanceof Error ? error.message : 'auth init failed';
+                        setAuthToken(null);
+                        setAuthUser(null);
+                        if (!isUnauthorizedErrorMessage(message)) {
+                            setAuthMessage(message);
+                        }
+                    }
                 }
             }
             catch (error) {
@@ -798,7 +821,12 @@ export function App() {
             }
             catch (error) {
                 if (!cancelled) {
-                    setLoadError(error instanceof Error ? error.message : 'unknown error');
+                    const message = error instanceof Error ? error.message : 'unknown error';
+                    if (isUnauthorizedErrorMessage(message)) {
+                        resetToLogin(message);
+                        return;
+                    }
+                    setLoadError(message);
                 }
             }
             finally {
@@ -1355,7 +1383,7 @@ export function App() {
     }
     if (loading || !bootstrap || !dashboard) {
         if (!loading && loadError) {
-            return _jsxs("div", { className: "loading-shell", children: [t.loadFailed, loadError] });
+            return (_jsx("div", { className: "loading-shell", children: _jsxs("div", { className: "card", style: { maxWidth: 560, width: '100%', textAlign: 'left' }, children: [_jsxs("p", { className: "submit-message", children: [t.loadFailed, loadError] }), _jsx("button", { type: "button", className: "primary-button", onClick: () => resetToLogin(loadError), children: locale === 'en-US' ? 'Back to login' : '返回登录' })] }) }));
         }
         return _jsx("div", { className: "loading-shell", children: t.loading });
     }

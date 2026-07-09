@@ -714,6 +714,24 @@ export function App() {
     return permissionSet.has(permission);
   }
 
+  function isUnauthorizedErrorMessage(message: string): boolean {
+    const normalized = message.toLowerCase();
+    return normalized.includes('unauthorized') || normalized.includes('please login first');
+  }
+
+  function resetToLogin(message: string) {
+    setAuthToken(null);
+    setAuthUser(null);
+    setBootstrap(null);
+    setDashboard(null);
+    setWaybills([]);
+    setWarnings([]);
+    setCacheScenarios(null);
+    setLoadError('');
+    setAuthMessage(message);
+    setLoading(false);
+  }
+
   const navItems = useMemo(
     () => [
       { key: 'overview' as NavKey, label: t.navOverview, visible: can('dashboard:view') },
@@ -758,8 +776,15 @@ export function App() {
           if (!cancelled) {
             setAuthUser(me.user);
           }
-        } catch {
-          setAuthUser(null);
+        } catch (error) {
+          if (!cancelled) {
+            const message = error instanceof Error ? error.message : 'auth init failed';
+            setAuthToken(null);
+            setAuthUser(null);
+            if (!isUnauthorizedErrorMessage(message)) {
+              setAuthMessage(message);
+            }
+          }
         }
       } catch (error) {
         if (!cancelled) {
@@ -934,7 +959,12 @@ export function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setLoadError(error instanceof Error ? error.message : 'unknown error');
+          const message = error instanceof Error ? error.message : 'unknown error';
+          if (isUnauthorizedErrorMessage(message)) {
+            resetToLogin(message);
+            return;
+          }
+          setLoadError(message);
         }
       } finally {
         if (!cancelled) {
@@ -1715,7 +1745,20 @@ export function App() {
 
   if (loading || !bootstrap || !dashboard) {
     if (!loading && loadError) {
-      return <div className="loading-shell">{t.loadFailed}{loadError}</div>;
+      return (
+        <div className="loading-shell">
+          <div className="card" style={{ maxWidth: 560, width: '100%', textAlign: 'left' }}>
+            <p className="submit-message">{t.loadFailed}{loadError}</p>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => resetToLogin(loadError)}
+            >
+              {locale === 'en-US' ? 'Back to login' : '返回登录'}
+            </button>
+          </div>
+        </div>
+      );
     }
     return <div className="loading-shell">{t.loading}</div>;
   }
