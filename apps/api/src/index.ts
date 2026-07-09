@@ -60,6 +60,21 @@ import {
   upsertPricingRuleInDb,
   upsertSettlementAdjustmentRuleInDb,
 } from './waybill-repository.js';
+import {
+  createCarrierInDb,
+  createDriverInDb,
+  createShipperInDb,
+  createVehicleInDb,
+  deleteCarrierInDb,
+  deleteDriverInDb,
+  deleteShipperInDb,
+  deleteVehicleInDb,
+  replaceArchivesFromDb,
+  updateCarrierInDb,
+  updateDriverInDb,
+  updateShipperInDb,
+  updateVehicleInDb,
+} from './archive-repository.js';
 import { acquireDistributedLock } from './redis-lock.js';
 import {
   cacheHasKey,
@@ -132,6 +147,9 @@ const shipperEmailSet = new Set(
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean),
 );
+const bootstrapCacheKeys = ['cache:bootstrap:v1', 'cache:bootstrap:v1:ADMIN', 'cache:bootstrap:v1:SHIPPER', 'cache:bootstrap:v1:CARRIER'];
+const archiveSyncTtlMs = 3_000;
+let lastArchiveSyncAt = 0;
 
 function resolveRoleByEmail(email: string): UserRole {
   const normalized = email.toLowerCase();
@@ -402,6 +420,7 @@ async function ensureDbReady(): Promise<boolean> {
   if (connected) {
     logger.info('db.reconnected', { storage: 'mysql-sharded' });
     try {
+      await replaceArchivesFromDb();
       await replacePricingRulesFromDb();
       await replaceSettlementAdjustmentRulesFromDb();
     } catch (error) {
@@ -411,6 +430,20 @@ async function ensureDbReady(): Promise<boolean> {
     }
   }
   return connected;
+}
+
+async function refreshArchivesIfNeeded(force = false): Promise<void> {
+  if (!(await ensureDbReady())) {
+    return;
+  }
+
+  const now = Date.now();
+  if (!force && now - lastArchiveSyncAt < archiveSyncTtlMs) {
+    return;
+  }
+
+  await replaceArchivesFromDb();
+  lastArchiveSyncAt = now;
 }
 
 async function buildDashboardSummaryFromDb() {
@@ -666,17 +699,20 @@ app.get('/api/bootstrap', requirePermission('dashboard:view'), (req, res) => {
     return res.status(401).json({ message: 'Unauthorized. Please login first.' });
   }
 
-  void rememberJson(`cache:bootstrap:v1:${user.role}`, 30 * 60, () => ({
-    system: {
-      name: 'Waybill & Settlement Admin',
-      locales: ['zh-CN', 'en-US'],
-      auth: ['Google OAuth2', 'RBAC'],
-      infra: ['MySQL Sharding', 'Redis', 'RabbitMQ', 'Docker Compose', 'Nginx'],
-    },
-    permissions: getRolePermissions(),
-    statusFlow: getStatusFlow(),
-    references: getReferenceDataForPermissions(user.permissions),
-  }))
+  void refreshArchivesIfNeeded()
+    .then(() =>
+      rememberJson(`cache:bootstrap:v1:${user.role}`, 30 * 60, () => ({
+        system: {
+          name: 'Waybill & Settlement Admin',
+          locales: ['zh-CN', 'en-US'],
+          auth: ['Google OAuth2', 'RBAC'],
+          infra: ['MySQL Sharding', 'Redis', 'RabbitMQ', 'Docker Compose', 'Nginx'],
+        },
+        permissions: getRolePermissions(),
+        statusFlow: getStatusFlow(),
+        references: getReferenceDataForPermissions(user.permissions),
+      })),
+    )
     .then(({ value, hit }) => {
       res.setHeader('x-cache-hit', hit ? '1' : '0');
       res.json(value);
@@ -719,7 +755,13 @@ app.get('/api/waybills', requirePermission('waybill:view'), async (_req, res) =>
 });
 
 app.get('/api/warnings', requirePermission('master:manage'), (_req, res) => {
-  res.json({ items: buildDocumentWarnings() });
+  void refreshArchivesIfNeeded()
+    .then(() => {
+      res.json({ items: buildDocumentWarnings() });
+    })
+    .catch((error: unknown) => {
+      res.status(500).json({ message: error instanceof Error ? error.message : 'Unknown error' });
+    });
 });
 
 app.get('/api/pricing-rules', requirePermission('settlement:view'), async (_req, res) => {
@@ -767,7 +809,7 @@ app.post('/api/pricing-rules', requirePermission('master:manage'), async (req, r
       const currentRules = await listPricingRulesFromDb();
       validatePricingRulePayload(rule, currentRules, { excludeId: rule.id });
       const rules = await upsertPricingRuleInDb(rule);
-      await cacheDelete('cache:bootstrap:v1');
+      await invalidateBootstrapCaches();
       logger.info('pricing_rules.upserted', {
         count: rules.length,
         index: typeof index === 'number' ? index : null,
@@ -780,7 +822,7 @@ app.post('/api/pricing-rules', requirePermission('master:manage'), async (req, r
       excludeIndex: typeof index === 'number' ? index : undefined,
     });
     const rules = upsertPricingRule(rule, index);
-    await cacheDelete('cache:bootstrap:v1');
+    await invalidateBootstrapCaches();
     logger.info('pricing_rules.upserted', {
       count: rules.length,
       index: typeof index === 'number' ? index : null,
@@ -812,7 +854,7 @@ app.delete('/api/pricing-rules/:id', requirePermission('master:manage'), async (
         }
       }
       const rules = await deletePricingRuleInDb(targetId);
-      await cacheDelete('cache:bootstrap:v1');
+      await invalidateBootstrapCaches();
       return res.json({ source: 'mysql', count: rules.length, items: rules });
     }
 
@@ -820,7 +862,7 @@ app.delete('/api/pricing-rules/:id', requirePermission('master:manage'), async (
       return res.status(400).json({ message: 'Invalid pricing rule index.' });
     }
     const rules = deletePricingRule(maybeIndex);
-    await cacheDelete('cache:bootstrap:v1');
+    await invalidateBootstrapCaches();
     return res.json({ source: 'memory', count: rules.length, items: rules });
   } catch (error) {
     return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
@@ -932,8 +974,12 @@ async function invalidateHotCaches(): Promise<void> {
   ]);
 }
 
+async function invalidateBootstrapCaches(): Promise<void> {
+  await Promise.all(bootstrapCacheKeys.map((key) => cacheDelete(key)));
+}
+
 async function invalidateArchiveCaches(keys: string[]): Promise<void> {
-  const toDelete = [...keys, 'cache:bootstrap:v1'];
+  const toDelete = [...keys, ...bootstrapCacheKeys];
   await Promise.all(toDelete.map((key) => cacheDelete(key)));
 }
 
@@ -1088,28 +1134,41 @@ app.post('/api/archives/shippers', requirePermission('master:manage'), async (re
     id: buildArchiveId('shipper'),
     ...parsed.data,
   };
-  shippers.push(newItem);
+  if (isDbEnabled()) {
+    const items = await createShipperInDb(newItem);
+    shippers.splice(0, shippers.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    shippers.push(newItem);
+  }
   await invalidateArchiveCaches([`shipper:detail:${newItem.id}`]);
   return res.status(201).json(newItem);
 });
 
 app.put('/api/archives/shippers/:id', requirePermission('master:manage'), async (req, res) => {
+  const archiveId = String(req.params.id);
   const parsed = partyProfileSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid shipper payload.', issues: parsed.error.issues });
   }
 
-  const index = shippers.findIndex((item) => item.id === req.params.id);
+  const index = shippers.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Shipper not found.' });
   }
 
-  shippers[index] = {
-    ...shippers[index],
-    ...parsed.data,
-  };
-  await invalidateArchiveCaches([`shipper:detail:${req.params.id}`]);
-  return res.json(shippers[index]);
+  if (isDbEnabled()) {
+    const items = await updateShipperInDb(archiveId, parsed.data);
+    shippers.splice(0, shippers.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    shippers[index] = {
+      ...shippers[index],
+      ...parsed.data,
+    };
+  }
+  await invalidateArchiveCaches([`shipper:detail:${archiveId}`]);
+  return res.json(shippers.find((item) => item.id === archiveId));
 });
 
 app.post('/api/archives/carriers', requirePermission('master:manage'), async (req, res) => {
@@ -1122,28 +1181,41 @@ app.post('/api/archives/carriers', requirePermission('master:manage'), async (re
     id: buildArchiveId('carrier'),
     ...parsed.data,
   };
-  carriers.push(newItem);
+  if (isDbEnabled()) {
+    const items = await createCarrierInDb(newItem);
+    carriers.splice(0, carriers.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    carriers.push(newItem);
+  }
   await invalidateArchiveCaches([`carrier:detail:${newItem.id}`]);
   return res.status(201).json(newItem);
 });
 
 app.put('/api/archives/carriers/:id', requirePermission('master:manage'), async (req, res) => {
+  const archiveId = String(req.params.id);
   const parsed = partyProfileSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid carrier payload.', issues: parsed.error.issues });
   }
 
-  const index = carriers.findIndex((item) => item.id === req.params.id);
+  const index = carriers.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Carrier not found.' });
   }
 
-  carriers[index] = {
-    ...carriers[index],
-    ...parsed.data,
-  };
-  await invalidateArchiveCaches([`carrier:detail:${req.params.id}`]);
-  return res.json(carriers[index]);
+  if (isDbEnabled()) {
+    const items = await updateCarrierInDb(archiveId, parsed.data);
+    carriers.splice(0, carriers.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    carriers[index] = {
+      ...carriers[index],
+      ...parsed.data,
+    };
+  }
+  await invalidateArchiveCaches([`carrier:detail:${archiveId}`]);
+  return res.json(carriers.find((item) => item.id === archiveId));
 });
 
 app.post('/api/archives/vehicles', requirePermission('master:manage'), async (req, res) => {
@@ -1156,28 +1228,41 @@ app.post('/api/archives/vehicles', requirePermission('master:manage'), async (re
     id: buildArchiveId('vehicle'),
     ...parsed.data,
   };
-  vehicles.push(newItem);
+  if (isDbEnabled()) {
+    const items = await createVehicleInDb(newItem);
+    vehicles.splice(0, vehicles.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    vehicles.push(newItem);
+  }
   await invalidateArchiveCaches([`vehicle:detail:${newItem.id}`]);
   return res.status(201).json(newItem);
 });
 
 app.put('/api/archives/vehicles/:id', requirePermission('master:manage'), async (req, res) => {
+  const archiveId = String(req.params.id);
   const parsed = vehicleProfileSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid vehicle payload.', issues: parsed.error.issues });
   }
 
-  const index = vehicles.findIndex((item) => item.id === req.params.id);
+  const index = vehicles.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Vehicle not found.' });
   }
 
-  vehicles[index] = {
-    ...vehicles[index],
-    ...parsed.data,
-  };
-  await invalidateArchiveCaches([`vehicle:detail:${req.params.id}`]);
-  return res.json(vehicles[index]);
+  if (isDbEnabled()) {
+    const items = await updateVehicleInDb(archiveId, parsed.data);
+    vehicles.splice(0, vehicles.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    vehicles[index] = {
+      ...vehicles[index],
+      ...parsed.data,
+    };
+  }
+  await invalidateArchiveCaches([`vehicle:detail:${archiveId}`]);
+  return res.json(vehicles.find((item) => item.id === archiveId));
 });
 
 app.post('/api/archives/drivers', requirePermission('master:manage'), async (req, res) => {
@@ -1190,92 +1275,137 @@ app.post('/api/archives/drivers', requirePermission('master:manage'), async (req
     id: buildArchiveId('driver'),
     ...parsed.data,
   };
-  drivers.push(newItem);
+  if (isDbEnabled()) {
+    const items = await createDriverInDb(newItem);
+    drivers.splice(0, drivers.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    drivers.push(newItem);
+  }
   await invalidateArchiveCaches([`driver:detail:${newItem.id}`]);
   return res.status(201).json(newItem);
 });
 
 app.put('/api/archives/drivers/:id', requirePermission('master:manage'), async (req, res) => {
+  const archiveId = String(req.params.id);
   const parsed = driverProfileSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid driver payload.', issues: parsed.error.issues });
   }
 
-  const index = drivers.findIndex((item) => item.id === req.params.id);
+  const index = drivers.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Driver not found.' });
   }
 
-  drivers[index] = {
-    ...drivers[index],
-    ...parsed.data,
-  };
-  await invalidateArchiveCaches([`driver:detail:${req.params.id}`]);
-  return res.json(drivers[index]);
+  if (isDbEnabled()) {
+    const items = await updateDriverInDb(archiveId, parsed.data);
+    drivers.splice(0, drivers.length, ...items);
+    lastArchiveSyncAt = Date.now();
+  } else {
+    drivers[index] = {
+      ...drivers[index],
+      ...parsed.data,
+    };
+  }
+  await invalidateArchiveCaches([`driver:detail:${archiveId}`]);
+  return res.json(drivers.find((item) => item.id === archiveId));
 });
 
 app.delete('/api/archives/shippers/:id', requirePermission('master:manage'), async (req, res) => {
-  const index = shippers.findIndex((item) => item.id === req.params.id);
+  const archiveId = String(req.params.id);
+  const index = shippers.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Shipper not found.' });
   }
 
-  const usedByWaybill = waybills.some((item) => item.shipperId === req.params.id);
-  const usedByPricing = listPricingRules().some((item) => item.shipperId === req.params.id);
+  const usedByWaybill = waybills.some((item) => item.shipperId === archiveId);
+  const usedByPricing = listPricingRules().some((item) => item.shipperId === archiveId);
   if (usedByWaybill || usedByPricing) {
     return res.status(409).json({ message: 'Shipper is in use and cannot be deleted.' });
   }
 
-  const [removed] = shippers.splice(index, 1);
-  await invalidateArchiveCaches([`shipper:detail:${req.params.id}`]);
+  let removed = shippers[index];
+  if (isDbEnabled()) {
+    await deleteShipperInDb(archiveId);
+    await replaceArchivesFromDb();
+    lastArchiveSyncAt = Date.now();
+  } else {
+    [removed] = shippers.splice(index, 1);
+  }
+  await invalidateArchiveCaches([`shipper:detail:${archiveId}`]);
   return res.json(removed);
 });
 
 app.delete('/api/archives/carriers/:id', requirePermission('master:manage'), async (req, res) => {
-  const index = carriers.findIndex((item) => item.id === req.params.id);
+  const archiveId = String(req.params.id);
+  const index = carriers.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Carrier not found.' });
   }
 
-  const usedByWaybill = waybills.some((item) => item.carrierId === req.params.id);
+  const usedByWaybill = waybills.some((item) => item.carrierId === archiveId);
   if (usedByWaybill) {
     return res.status(409).json({ message: 'Carrier is in use and cannot be deleted.' });
   }
 
-  const [removed] = carriers.splice(index, 1);
-  await invalidateArchiveCaches([`carrier:detail:${req.params.id}`]);
+  let removed = carriers[index];
+  if (isDbEnabled()) {
+    await deleteCarrierInDb(archiveId);
+    await replaceArchivesFromDb();
+    lastArchiveSyncAt = Date.now();
+  } else {
+    [removed] = carriers.splice(index, 1);
+  }
+  await invalidateArchiveCaches([`carrier:detail:${archiveId}`]);
   return res.json(removed);
 });
 
 app.delete('/api/archives/vehicles/:id', requirePermission('master:manage'), async (req, res) => {
-  const index = vehicles.findIndex((item) => item.id === req.params.id);
+  const archiveId = String(req.params.id);
+  const index = vehicles.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Vehicle not found.' });
   }
 
-  const usedByWaybill = waybills.some((item) => item.vehicleId === req.params.id);
+  const usedByWaybill = waybills.some((item) => item.vehicleId === archiveId);
   if (usedByWaybill) {
     return res.status(409).json({ message: 'Vehicle is in use and cannot be deleted.' });
   }
 
-  const [removed] = vehicles.splice(index, 1);
-  await invalidateArchiveCaches([`vehicle:detail:${req.params.id}`]);
+  let removed = vehicles[index];
+  if (isDbEnabled()) {
+    await deleteVehicleInDb(archiveId);
+    await replaceArchivesFromDb();
+    lastArchiveSyncAt = Date.now();
+  } else {
+    [removed] = vehicles.splice(index, 1);
+  }
+  await invalidateArchiveCaches([`vehicle:detail:${archiveId}`]);
   return res.json(removed);
 });
 
 app.delete('/api/archives/drivers/:id', requirePermission('master:manage'), async (req, res) => {
-  const index = drivers.findIndex((item) => item.id === req.params.id);
+  const archiveId = String(req.params.id);
+  const index = drivers.findIndex((item) => item.id === archiveId);
   if (index < 0) {
     return res.status(404).json({ message: 'Driver not found.' });
   }
 
-  const assignedVehicle = vehicles.some((item) => item.assignedDriverId === req.params.id);
+  const assignedVehicle = vehicles.some((item) => item.assignedDriverId === archiveId);
   if (assignedVehicle) {
     return res.status(409).json({ message: 'Driver is assigned to a vehicle and cannot be deleted.' });
   }
 
-  const [removed] = drivers.splice(index, 1);
-  await invalidateArchiveCaches([`driver:detail:${req.params.id}`]);
+  let removed = drivers[index];
+  if (isDbEnabled()) {
+    await deleteDriverInDb(archiveId);
+    await replaceArchivesFromDb();
+    lastArchiveSyncAt = Date.now();
+  } else {
+    [removed] = drivers.splice(index, 1);
+  }
+  await invalidateArchiveCaches([`driver:detail:${archiveId}`]);
   return res.json(removed);
 });
 
@@ -1285,24 +1415,26 @@ app.post('/api/waybills/quote', requirePermission('waybill:create'), (req, res) 
     return res.status(400).json({ message: 'Invalid draft payload.', issues: parsed.error.issues });
   }
 
-  try {
-    const vehicle = vehicles.find((item) => item.id === parsed.data.vehicleId);
-    if (!vehicle) {
-      return res.status(404).json({ message: 'Vehicle not found.' });
-    }
-    const capacity = validateCapacity(parsed.data, vehicle);
-    if (!capacity.valid) {
-      return res.status(400).json({
-        code: 'CAPACITY_EXCEEDED',
-        message: `Capacity exceeded. overweightKg=${capacity.overweightKg}, overVolumeM3=${capacity.overVolumeM3}, suggestedSplitCount=${capacity.suggestedSplitCount}`,
-        ...capacity,
-      });
-    }
-    const fee = calculateFees(parsed.data);
-    return res.json({ capacity, fee });
-  } catch (error) {
-    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
-  }
+  void refreshArchivesIfNeeded()
+    .then(() => {
+      const vehicle = vehicles.find((item) => item.id === parsed.data.vehicleId);
+      if (!vehicle) {
+        return res.status(404).json({ message: 'Vehicle not found.' });
+      }
+      const capacity = validateCapacity(parsed.data, vehicle);
+      if (!capacity.valid) {
+        return res.status(400).json({
+          code: 'CAPACITY_EXCEEDED',
+          message: `Capacity exceeded. overweightKg=${capacity.overweightKg}, overVolumeM3=${capacity.overVolumeM3}, suggestedSplitCount=${capacity.suggestedSplitCount}`,
+          ...capacity,
+        });
+      }
+      const fee = calculateFees(parsed.data);
+      return res.json({ capacity, fee });
+    })
+    .catch((error: unknown) => {
+      return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
+    });
 });
 
 app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) => {
@@ -1613,6 +1745,11 @@ app.listen(port, () => {
   void initializeDb().then((connected) => {
     if (connected) {
       logger.info('db.connected', { storage: 'mysql-sharded' });
+      void replaceArchivesFromDb().catch((error: unknown) => {
+        logger.warn('archives.reload_on_boot_failed', {
+          error: error instanceof Error ? error.message : 'unknown',
+        });
+      });
       void replacePricingRulesFromDb()
         .then((rules) => {
           logger.info('pricing_rules.reloaded_on_boot', { count: rules.length });
@@ -1660,11 +1797,11 @@ app.post('/api/settlement-adjustments', requirePermission('master:manage'), asyn
   try {
     if (isDbEnabled()) {
       const items = await upsertSettlementAdjustmentRuleInDb(rule);
-      await cacheDelete('cache:bootstrap:v1');
+      await invalidateBootstrapCaches();
       return res.status(201).json({ source: 'mysql', count: items.length, items });
     }
     const items = upsertSettlementAdjustmentRule(rule, index);
-    await cacheDelete('cache:bootstrap:v1');
+    await invalidateBootstrapCaches();
     return res.status(201).json({ source: 'memory', count: items.length, items });
   } catch (error: unknown) {
     res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
@@ -1689,7 +1826,7 @@ app.delete('/api/settlement-adjustments/:id', requirePermission('master:manage')
         }
       }
       const items = await deleteSettlementAdjustmentRuleInDb(targetId);
-      await cacheDelete('cache:bootstrap:v1');
+      await invalidateBootstrapCaches();
       return res.json({ source: 'mysql', count: items.length, items });
     }
 
@@ -1697,7 +1834,7 @@ app.delete('/api/settlement-adjustments/:id', requirePermission('master:manage')
       return res.status(400).json({ message: 'Invalid settlement adjustment index.' });
     }
     const items = deleteSettlementAdjustmentRule(maybeIndex);
-    await cacheDelete('cache:bootstrap:v1');
+    await invalidateBootstrapCaches();
     return res.json({ source: 'memory', count: items.length, items });
   } catch (error: unknown) {
     res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });

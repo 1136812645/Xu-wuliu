@@ -528,6 +528,40 @@ const emptyPricingRuleDraft: PricingRuleDraft = {
   insuranceRate: '0',
 };
 
+function buildNextPricingRuleDraft(
+  rules: PricingRule[],
+  options?: { shipperId?: string; truckType?: PricingRule['truckType']; fallbackShipperId?: string },
+): PricingRuleDraft {
+  const shipperId = options?.shipperId ?? options?.fallbackShipperId ?? rules[0]?.shipperId ?? emptyPricingRuleDraft.shipperId;
+  const truckType =
+    options?.truckType ??
+    rules.find((rule) => rule.shipperId === shipperId)?.truckType ??
+    emptyPricingRuleDraft.truckType;
+
+  const scopedRules = rules
+    .filter((rule) => rule.shipperId === shipperId && rule.truckType === truckType)
+    .sort((left, right) => left.maxMileageKm - right.maxMileageKm);
+
+  const lastRule = scopedRules.at(-1);
+  if (!lastRule) {
+    return {
+      ...emptyPricingRuleDraft,
+      shipperId,
+      truckType,
+    };
+  }
+
+  return {
+    shipperId,
+    truckType,
+    minMileageKm: String(lastRule.maxMileageKm + 1),
+    maxMileageKm: String(lastRule.maxMileageKm + 300),
+    unitPricePerKm: String(lastRule.unitPricePerKm),
+    loadingFee: String(lastRule.loadingFee),
+    insuranceRate: String(lastRule.insuranceRate),
+  };
+}
+
 function toPricingRuleDraft(rule: PricingRule): PricingRuleDraft {
   return {
     ...rule,
@@ -992,6 +1026,11 @@ export function App() {
           setWaybills(waybillData.items);
           setWarnings(warningData.items);
           setPricingRuleDrafts(pricingData.items.map((rule) => toPricingRuleDraft(rule)));
+          setPricingRuleCreateDraft(
+            buildNextPricingRuleDraft(pricingData.items, {
+              fallbackShipperId: bootstrapData.references.shippers[0]?.id,
+            }),
+          );
           setSettlementAdjustmentDrafts(adjustmentData.items.map((rule) => toSettlementAdjustmentDraft(rule)));
           setCacheScenarios(cacheScenarioData);
         }
@@ -1067,6 +1106,11 @@ export function App() {
     setBootstrap(bootstrapData);
     setWarnings(warningData.items);
     setPricingRuleDrafts(pricingData.items.map((rule) => toPricingRuleDraft(rule)));
+    setPricingRuleCreateDraft(
+      buildNextPricingRuleDraft(pricingData.items, {
+        fallbackShipperId: bootstrapData.references.shippers[0]?.id,
+      }),
+    );
     setSettlementAdjustmentDrafts(adjustmentData.items.map((rule) => toSettlementAdjustmentDraft(rule)));
     setCacheScenarios(cacheScenarioData);
   }
@@ -1096,7 +1140,6 @@ export function App() {
     try {
       await savePricingRule(toPricingRulePayload(pricingRuleCreateDraft));
       await reloadReferences();
-      setPricingRuleCreateDraft({ ...emptyPricingRuleDraft });
       setSettlementMessage(t.saveSuccess);
     } catch (error) {
       setSettlementMessage(`${t.saveFailed}: ${error instanceof Error ? error.message : 'unknown error'}`);
@@ -2738,7 +2781,21 @@ export function App() {
               <form className="form-grid" onSubmit={handleCreatePricingRule}>
                 <label>
                   <span>{t.shipper}</span>
-                  <select value={pricingRuleCreateDraft.shipperId} onChange={(event) => setPricingRuleCreateDraft((current) => ({ ...current, shipperId: event.target.value }))}>
+                  <select
+                    value={pricingRuleCreateDraft.shipperId}
+                    onChange={(event) =>
+                      setPricingRuleCreateDraft((current) =>
+                        buildNextPricingRuleDraft(
+                          pricingRuleDrafts.map((item) => toPricingRulePayload(item)),
+                          {
+                            shipperId: event.target.value,
+                            truckType: current.truckType,
+                            fallbackShipperId: event.target.value,
+                          },
+                        ),
+                      )
+                    }
+                  >
                     {bootstrap.references.shippers.map((item) => (
                       <option key={`create-pricing-shipper-${item.id}`} value={item.id}>{item.id}</option>
                     ))}
@@ -2746,7 +2803,21 @@ export function App() {
                 </label>
                 <label>
                   <span>{t.truckType}</span>
-                  <select value={pricingRuleCreateDraft.truckType} onChange={(event) => setPricingRuleCreateDraft((current) => ({ ...current, truckType: event.target.value as PricingRule['truckType'] }))}>
+                  <select
+                    value={pricingRuleCreateDraft.truckType}
+                    onChange={(event) =>
+                      setPricingRuleCreateDraft((current) =>
+                        buildNextPricingRuleDraft(
+                          pricingRuleDrafts.map((item) => toPricingRulePayload(item)),
+                          {
+                            shipperId: current.shipperId,
+                            truckType: event.target.value as PricingRule['truckType'],
+                            fallbackShipperId: current.shipperId,
+                          },
+                        ),
+                      )
+                    }
+                  >
                     <option value="4.2M">4.2M</option>
                     <option value="6.8M">6.8M</option>
                     <option value="9.6M">9.6M</option>
@@ -2773,6 +2844,7 @@ export function App() {
                   <input type="number" step="any" value={pricingRuleCreateDraft.insuranceRate} onChange={(event) => setPricingRuleCreateDraft((current) => ({ ...current, insuranceRate: event.target.value }))} />
                 </label>
                 <button className="primary-button" type="submit" disabled={!can('master:manage')}>{t.actionCreate}</button>
+                {settlementMessage ? <p className="submit-message">{settlementMessage}</p> : null}
               </form>
             </section>
 
