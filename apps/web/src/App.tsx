@@ -252,6 +252,9 @@ const I18N = {
     loginHint: '请先登录后再进行业务操作。',
     loginByGoogle: 'Google 登录',
     googleNotConfigured: 'Google 登录未启用，请在服务端配置 GOOGLE_CLIENT_ID。',
+    googleLoading: 'Google 登录组件加载中...',
+    googleUnavailable: 'Google 登录按钮加载失败，请检查网络或浏览器插件后重试。',
+    googleRetry: '重试加载 Google 登录',
     devLogin: '开发模式登录',
     passwordLogin: '账号密码登录',
     registerAccount: '注册账号',
@@ -440,6 +443,9 @@ const I18N = {
     loginHint: 'Please sign in before operating business actions.',
     loginByGoogle: 'Google Sign In',
     googleNotConfigured: 'Google sign-in is disabled. Configure GOOGLE_CLIENT_ID on the server.',
+    googleLoading: 'Loading Google sign-in widget...',
+    googleUnavailable: 'Failed to load Google sign-in button. Check network or browser extensions and retry.',
+    googleRetry: 'Retry Google sign-in load',
     devLogin: 'Dev Login',
     passwordLogin: 'Password Login',
     registerAccount: 'Register Account',
@@ -655,6 +661,8 @@ export function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authMessage, setAuthMessage] = useState('');
   const [authLoading, setAuthLoading] = useState(true);
+  const [googleUiState, setGoogleUiState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+  const [googleRetrySeed, setGoogleRetrySeed] = useState(0);
   const [devLoginForm, setDevLoginForm] = useState({
     email: 'admin@example.com',
     name: 'Admin User',
@@ -808,15 +816,17 @@ export function App() {
 
   useEffect(() => {
     if (!authConfig?.googleEnabled || !authConfig.googleClientId || authUser) {
+      setGoogleUiState('idle');
       return;
     }
+    setGoogleUiState('loading');
     const googleClientId = authConfig.googleClientId;
 
     const scriptId = 'google-identity-service';
-    const renderGoogleButton = () => {
+    const renderGoogleButton = (): boolean => {
       const host = document.getElementById('google-login-btn');
       if (!host || !window.google?.accounts?.id) {
-        return;
+        return false;
       }
 
       window.google.accounts.id.initialize({
@@ -840,11 +850,19 @@ export function App() {
         shape: 'pill',
         text: 'signin_with',
       });
+      setGoogleUiState('ready');
+      return true;
     };
 
-    const existing = document.getElementById(scriptId);
-    if (existing) {
-      renderGoogleButton();
+    const existing = document.getElementById(scriptId) as HTMLScriptElement | null;
+    if (existing && !window.google?.accounts?.id) {
+      existing.remove();
+    }
+
+    if (window.google?.accounts?.id) {
+      if (!renderGoogleButton()) {
+        setGoogleUiState('error');
+      }
       return;
     }
 
@@ -853,9 +871,25 @@ export function App() {
     script.src = 'https://accounts.google.com/gsi/client';
     script.async = true;
     script.defer = true;
-    script.onload = () => renderGoogleButton();
+    script.onload = () => {
+      if (!renderGoogleButton()) {
+        setGoogleUiState('error');
+      }
+    };
+    script.onerror = () => setGoogleUiState('error');
     document.head.appendChild(script);
-  }, [authConfig, authUser]);
+
+    const timer = window.setTimeout(() => {
+      const host = document.getElementById('google-login-btn');
+      if (!host?.childElementCount) {
+        setGoogleUiState('error');
+      }
+    }, 6000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [authConfig, authUser, googleRetrySeed]);
 
   async function handleDevLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1650,6 +1684,15 @@ export function App() {
             <>
               <p>{t.loginByGoogle}</p>
               <div id="google-login-btn" />
+              {googleUiState === 'loading' ? <p>{t.googleLoading}</p> : null}
+              {googleUiState === 'error' ? (
+                <>
+                  <p className="submit-message">{t.googleUnavailable}</p>
+                  <button className="filter-button" type="button" onClick={() => setGoogleRetrySeed((value) => value + 1)}>
+                    {t.googleRetry}
+                  </button>
+                </>
+              ) : null}
             </>
           ) : (
             <p>{t.googleNotConfigured}</p>
