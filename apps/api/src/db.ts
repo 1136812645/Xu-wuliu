@@ -36,6 +36,7 @@ export async function initializeDb(): Promise<boolean> {
   pool = 'uri' in config
     ? mysql.createPool({
         uri: config.uri,
+        charset: 'utf8mb4',
         connectionLimit: 10,
         namedPlaceholders: true,
       })
@@ -45,6 +46,7 @@ export async function initializeDb(): Promise<boolean> {
         user: config.user,
         password: config.password,
         database: config.database,
+        charset: 'utf8mb4',
         connectionLimit: 10,
         namedPlaceholders: true,
       });
