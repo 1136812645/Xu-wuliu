@@ -747,7 +747,7 @@ export function App() {
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [cacheScenarios, setCacheScenarios] = useState<CacheScenarioPayload | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importChunkSize, setImportChunkSize] = useState(800);
+  const [importChunkSize, setImportChunkSize] = useState(100);
   const [importBusy, setImportBusy] = useState(false);
   const [importProgress, setImportProgress] = useState({ done: 0, total: 0, created: 0, failed: 0 });
   const [waybillPage, setWaybillPage] = useState(1);
@@ -1649,7 +1649,8 @@ export function App() {
 
     try {
       const rows = await parseCsvFile(importFile);
-      const chunks = chunkRows(rows, Math.max(50, Math.min(1000, importChunkSize)));
+      const safeChunkSize = Math.max(20, Math.min(200, importChunkSize));
+      const chunks = chunkRows(rows, safeChunkSize);
       setImportProgress({ done: 0, total: rows.length, created: 0, failed: 0 });
 
       for (const chunk of chunks) {
@@ -1684,7 +1685,12 @@ export function App() {
       setDashboard(dashboardData);
       setWaybills(waybillData.items);
     } catch (error) {
-      setActionMessage(error instanceof Error ? error.message : t.createFailed);
+      const message = error instanceof Error ? error.message : t.createFailed;
+      if (message.includes('PayloadTooLargeError') || message.includes('request entity too large')) {
+        setActionMessage(locale === 'en-US' ? 'Import chunk is too large. Please set chunk size to 100 or below.' : '单次导入分片过大，请将分批大小调到 100 或以下。');
+      } else {
+        setActionMessage(message);
+      }
     } finally {
       setImportBusy(false);
     }
@@ -1716,10 +1722,10 @@ export function App() {
             <span>{t.importChunkSize}</span>
             <input
               type="number"
-              min={50}
-              max={1000}
+              min={20}
+              max={200}
               value={importChunkSize}
-              onChange={(event) => setImportChunkSize(Number(event.target.value) || 800)}
+              onChange={(event) => setImportChunkSize(Number(event.target.value) || 100)}
               disabled={importBusy}
             />
           </label>

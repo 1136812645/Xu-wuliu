@@ -624,7 +624,7 @@ export function App() {
     const [actionBusyId, setActionBusyId] = useState(null);
     const [cacheScenarios, setCacheScenarios] = useState(null);
     const [importFile, setImportFile] = useState(null);
-    const [importChunkSize, setImportChunkSize] = useState(800);
+    const [importChunkSize, setImportChunkSize] = useState(100);
     const [importBusy, setImportBusy] = useState(false);
     const [importProgress, setImportProgress] = useState({ done: 0, total: 0, created: 0, failed: 0 });
     const [waybillPage, setWaybillPage] = useState(1);
@@ -1465,7 +1465,8 @@ export function App() {
         let storage = 'unknown';
         try {
             const rows = await parseCsvFile(importFile);
-            const chunks = chunkRows(rows, Math.max(50, Math.min(1000, importChunkSize)));
+            const safeChunkSize = Math.max(20, Math.min(200, importChunkSize));
+            const chunks = chunkRows(rows, safeChunkSize);
             setImportProgress({ done: 0, total: rows.length, created: 0, failed: 0 });
             for (const chunk of chunks) {
                 chunkCount += 1;
@@ -1498,7 +1499,13 @@ export function App() {
             setWaybills(waybillData.items);
         }
         catch (error) {
-            setActionMessage(error instanceof Error ? error.message : t.createFailed);
+            const message = error instanceof Error ? error.message : t.createFailed;
+            if (message.includes('PayloadTooLargeError') || message.includes('request entity too large')) {
+                setActionMessage(locale === 'en-US' ? 'Import chunk is too large. Please set chunk size to 100 or below.' : '单次导入分片过大，请将分批大小调到 100 或以下。');
+            }
+            else {
+                setActionMessage(message);
+            }
         }
         finally {
             setImportBusy(false);
@@ -1508,7 +1515,7 @@ export function App() {
         if (!can('waybill:create')) {
             return null;
         }
-        return (_jsxs("section", { className: "card", children: [_jsxs("div", { className: "section-head", children: [_jsx("h3", { children: t.importTitle }), _jsx("span", { children: t.importHint })] }), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: [_jsx("span", { children: t.importPickFile }), _jsx("input", { type: "file", accept: ".csv", onChange: (event) => setImportFile(event.target.files?.[0] ?? null), disabled: importBusy })] }), _jsxs("label", { children: [_jsx("span", { children: t.importChunkSize }), _jsx("input", { type: "number", min: 50, max: 1000, value: importChunkSize, onChange: (event) => setImportChunkSize(Number(event.target.value) || 800), disabled: importBusy })] }), _jsx("button", { className: "primary-button", type: "button", onClick: () => void handleImport10k(), disabled: importBusy || !can('waybill:create'), children: t.importStart })] }), _jsxs("div", { className: "import-progress-row", children: [_jsx("strong", { children: t.importProgress }), _jsxs("span", { children: [importProgress.done, "/", importProgress.total] }), _jsxs("span", { children: [t.importCreated, ": ", importProgress.created] }), _jsxs("span", { children: [t.importFailed, ": ", importProgress.failed] })] }), importReport ? (_jsxs("div", { className: "import-report-grid", children: [_jsxs("article", { children: [_jsx("strong", { children: t.importDuration }), _jsxs("p", { children: [importReport.durationSec, "s"] })] }), _jsxs("article", { children: [_jsx("strong", { children: t.importStorage }), _jsx("p", { children: importReport.storage })] }), _jsxs("article", { children: [_jsx("strong", { children: t.importPeakHeap }), _jsx("p", { children: importReport.peakHeapAfterMB })] }), _jsxs("article", { children: [_jsx("strong", { children: "Batch" }), _jsxs("p", { children: [importReport.importBatchId, " / chunks=", importReport.chunkCount] })] })] })) : null] }));
+        return (_jsxs("section", { className: "card", children: [_jsxs("div", { className: "section-head", children: [_jsx("h3", { children: t.importTitle }), _jsx("span", { children: t.importHint })] }), _jsxs("div", { className: "form-grid", children: [_jsxs("label", { children: [_jsx("span", { children: t.importPickFile }), _jsx("input", { type: "file", accept: ".csv", onChange: (event) => setImportFile(event.target.files?.[0] ?? null), disabled: importBusy })] }), _jsxs("label", { children: [_jsx("span", { children: t.importChunkSize }), _jsx("input", { type: "number", min: 20, max: 200, value: importChunkSize, onChange: (event) => setImportChunkSize(Number(event.target.value) || 100), disabled: importBusy })] }), _jsx("button", { className: "primary-button", type: "button", onClick: () => void handleImport10k(), disabled: importBusy || !can('waybill:create'), children: t.importStart })] }), _jsxs("div", { className: "import-progress-row", children: [_jsx("strong", { children: t.importProgress }), _jsxs("span", { children: [importProgress.done, "/", importProgress.total] }), _jsxs("span", { children: [t.importCreated, ": ", importProgress.created] }), _jsxs("span", { children: [t.importFailed, ": ", importProgress.failed] })] }), importReport ? (_jsxs("div", { className: "import-report-grid", children: [_jsxs("article", { children: [_jsx("strong", { children: t.importDuration }), _jsxs("p", { children: [importReport.durationSec, "s"] })] }), _jsxs("article", { children: [_jsx("strong", { children: t.importStorage }), _jsx("p", { children: importReport.storage })] }), _jsxs("article", { children: [_jsx("strong", { children: t.importPeakHeap }), _jsx("p", { children: importReport.peakHeapAfterMB })] }), _jsxs("article", { children: [_jsx("strong", { children: "Batch" }), _jsxs("p", { children: [importReport.importBatchId, " / chunks=", importReport.chunkCount] })] })] })) : null] }));
     }
     if (authLoading) {
         return _jsx("div", { className: "loading-shell", children: t.loading });
