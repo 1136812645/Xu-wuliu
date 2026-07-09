@@ -8,6 +8,13 @@ services:
     environment:
       INSTANCE_ID: api-2
       PORT: 3000
+      DEV_LOGIN_ENABLED: ${DEV_LOGIN_ENABLED:-1}
+      DEV_LOGIN_PASSWORD: ${DEV_LOGIN_PASSWORD:-123456}
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-waybill-auth-session-secret}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_ADMIN_EMAILS: ${GOOGLE_ADMIN_EMAILS:-admin@example.com}
+      GOOGLE_CARRIER_EMAILS: ${GOOGLE_CARRIER_EMAILS:-carrier@example.com}
+      GOOGLE_SHIPPER_EMAILS: ${GOOGLE_SHIPPER_EMAILS:-shipper@example.com}
       DB_HOST: mysql
       DB_PORT: 3306
       DB_USER: root
