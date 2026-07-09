@@ -4,6 +4,8 @@ import type { FeeComponent, PricingRule, SettlementAdjustmentRule, WaybillDraft,
 import { calculateFees, replacePricingRules, replaceSettlementAdjustmentRules, resolveShardTable } from './logic.js';
 
 const CREATE_OPERATION = 'CREATE';
+const SETTLEMENT_RULE_SYNC_TTL_MS = 15_000;
+let lastSettlementRuleSyncAt = 0;
 
 type TransitionBlockedReason =
   | 'IDEMPOTENCY_KEY_HIT'
@@ -32,8 +34,13 @@ export interface WaybillBatchImportResult {
  * @returns resolves when pricing and adjustment rules are refreshed from DB.
  */
 async function syncSettlementRulesForDbFeeCalculation(): Promise<void> {
+  const now = Date.now();
+  if (now - lastSettlementRuleSyncAt < SETTLEMENT_RULE_SYNC_TTL_MS) {
+    return;
+  }
   await replacePricingRulesFromDb();
   await replaceSettlementAdjustmentRulesFromDb();
+  lastSettlementRuleSyncAt = now;
 }
 
 interface ShardConfigRow extends RowDataPacket {

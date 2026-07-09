@@ -701,7 +701,7 @@ export function App() {
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
   const [cacheScenarios, setCacheScenarios] = useState<CacheScenarioPayload | null>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importChunkSize, setImportChunkSize] = useState(200);
+  const [importChunkSize, setImportChunkSize] = useState(800);
   const [importBusy, setImportBusy] = useState(false);
   const [importProgress, setImportProgress] = useState({ done: 0, total: 0, created: 0, failed: 0 });
   const [waybillPage, setWaybillPage] = useState(1);
@@ -1606,7 +1606,7 @@ export function App() {
               min={50}
               max={1000}
               value={importChunkSize}
-              onChange={(event) => setImportChunkSize(Number(event.target.value) || 200)}
+              onChange={(event) => setImportChunkSize(Number(event.target.value) || 800)}
               disabled={importBusy}
             />
           </label>

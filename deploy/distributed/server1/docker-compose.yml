@@ -32,18 +32,46 @@ services:
       GOOGLE_ADMIN_EMAILS: ${GOOGLE_ADMIN_EMAILS:-admin@example.com}
       GOOGLE_CARRIER_EMAILS: ${GOOGLE_CARRIER_EMAILS:-carrier@example.com}
       GOOGLE_SHIPPER_EMAILS: ${GOOGLE_SHIPPER_EMAILS:-shipper@example.com}
-      DB_HOST: 192.168.5.82
-      DB_PORT: 13306
+      DB_HOST: mysql
+      DB_PORT: 3306
       DB_USER: root
       DB_PASSWORD: root
       DB_NAME: waybill_admin
-      REDIS_HOST: 192.168.5.82
-      REDIS_PORT: 16379
-      RABBITMQ_URL: amqp://waybill:waybill123@192.168.5.82:5673
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      RABBITMQ_URL: amqp://waybill:waybill123@rabbitmq:5672
     restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis
+      - rabbitmq
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 3
       start_period: 20s
+
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: waybill_admin
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: waybill
+      RABBITMQ_DEFAULT_PASS: waybill123
+
+volumes:
+  mysql-data:
