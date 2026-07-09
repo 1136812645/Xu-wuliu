@@ -1134,7 +1134,7 @@ app.post('/api/archives/shippers', requirePermission('master:manage'), async (re
     id: buildArchiveId('shipper'),
     ...parsed.data,
   };
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await createShipperInDb(newItem);
     shippers.splice(0, shippers.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1157,7 +1157,7 @@ app.put('/api/archives/shippers/:id', requirePermission('master:manage'), async 
     return res.status(404).json({ message: 'Shipper not found.' });
   }
 
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await updateShipperInDb(archiveId, parsed.data);
     shippers.splice(0, shippers.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1181,7 +1181,7 @@ app.post('/api/archives/carriers', requirePermission('master:manage'), async (re
     id: buildArchiveId('carrier'),
     ...parsed.data,
   };
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await createCarrierInDb(newItem);
     carriers.splice(0, carriers.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1204,7 +1204,7 @@ app.put('/api/archives/carriers/:id', requirePermission('master:manage'), async 
     return res.status(404).json({ message: 'Carrier not found.' });
   }
 
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await updateCarrierInDb(archiveId, parsed.data);
     carriers.splice(0, carriers.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1228,7 +1228,7 @@ app.post('/api/archives/vehicles', requirePermission('master:manage'), async (re
     id: buildArchiveId('vehicle'),
     ...parsed.data,
   };
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await createVehicleInDb(newItem);
     vehicles.splice(0, vehicles.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1251,7 +1251,7 @@ app.put('/api/archives/vehicles/:id', requirePermission('master:manage'), async 
     return res.status(404).json({ message: 'Vehicle not found.' });
   }
 
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await updateVehicleInDb(archiveId, parsed.data);
     vehicles.splice(0, vehicles.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1275,7 +1275,7 @@ app.post('/api/archives/drivers', requirePermission('master:manage'), async (req
     id: buildArchiveId('driver'),
     ...parsed.data,
   };
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await createDriverInDb(newItem);
     drivers.splice(0, drivers.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1298,7 +1298,7 @@ app.put('/api/archives/drivers/:id', requirePermission('master:manage'), async (
     return res.status(404).json({ message: 'Driver not found.' });
   }
 
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     const items = await updateDriverInDb(archiveId, parsed.data);
     drivers.splice(0, drivers.length, ...items);
     lastArchiveSyncAt = Date.now();
@@ -1326,7 +1326,7 @@ app.delete('/api/archives/shippers/:id', requirePermission('master:manage'), asy
   }
 
   let removed = shippers[index];
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     await deleteShipperInDb(archiveId);
     await replaceArchivesFromDb();
     lastArchiveSyncAt = Date.now();
@@ -1350,7 +1350,7 @@ app.delete('/api/archives/carriers/:id', requirePermission('master:manage'), asy
   }
 
   let removed = carriers[index];
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     await deleteCarrierInDb(archiveId);
     await replaceArchivesFromDb();
     lastArchiveSyncAt = Date.now();
@@ -1374,7 +1374,7 @@ app.delete('/api/archives/vehicles/:id', requirePermission('master:manage'), asy
   }
 
   let removed = vehicles[index];
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     await deleteVehicleInDb(archiveId);
     await replaceArchivesFromDb();
     lastArchiveSyncAt = Date.now();
@@ -1398,7 +1398,7 @@ app.delete('/api/archives/drivers/:id', requirePermission('master:manage'), asyn
   }
 
   let removed = drivers[index];
-  if (isDbEnabled()) {
+  if (await ensureDbReady()) {
     await deleteDriverInDb(archiveId);
     await replaceArchivesFromDb();
     lastArchiveSyncAt = Date.now();

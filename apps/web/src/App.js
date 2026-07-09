@@ -405,12 +405,17 @@ const emptyPartyDraft = {
     contactName: '',
     phone: '',
 };
+function buildDefaultRoadPermitExpiry() {
+    const date = new Date();
+    date.setFullYear(date.getFullYear() + 1);
+    return date.toISOString().slice(0, 10);
+}
 const emptyVehicleDraft = {
     plateNumber: '',
     truckType: '9.6M',
     maxWeightKg: 0,
     maxVolumeM3: 0,
-    roadPermitExpiry: '',
+    roadPermitExpiry: buildDefaultRoadPermitExpiry(),
     assignedDriverId: 'driver-1',
 };
 const emptyDriverDraft = {
@@ -1109,9 +1114,21 @@ export function App() {
             setArchiveMessage(t.noPermission);
             return;
         }
+        const normalizedPlateNumber = vehicleDraft.plateNumber.trim();
+        const normalizedRoadPermitExpiry = vehicleDraft.roadPermitExpiry.trim();
+        if (!normalizedPlateNumber) {
+            setArchiveMessage(locale === 'en-US' ? 'Please enter plate number before saving.' : '请先填写车牌号后再保存。');
+            return;
+        }
+        if (!normalizedRoadPermitExpiry) {
+            setArchiveMessage(locale === 'en-US' ? 'Please select road permit expiry before saving.' : '请先填写道路运输证到期日后再保存。');
+            return;
+        }
         try {
             const payload = {
                 ...vehicleDraft,
+                plateNumber: normalizedPlateNumber,
+                roadPermitExpiry: normalizedRoadPermitExpiry,
                 maxWeightKg: Number(vehicleDraft.maxWeightKg),
                 maxVolumeM3: Number(vehicleDraft.maxVolumeM3),
             };
@@ -1525,7 +1542,7 @@ export function App() {
                                                                                 });
                                                                                 setArchiveMessage('');
                                                                             }, children: t.actionEdit }), _jsx("button", { type: "button", className: "filter-button", disabled: !can('master:manage'), onClick: () => void handleDelete('vehicle', item.id), children: t.actionDelete })] })] }, item.id));
-                                                    }) })] }), _jsxs("form", { className: "form-grid", onSubmit: handleSaveVehicle, children: [_jsxs("label", { children: [_jsx("span", { children: t.formPlateNo }), _jsx("input", { value: vehicleDraft.plateNumber, onChange: (e) => setVehicleDraft((c) => ({ ...c, plateNumber: e.target.value })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.truckType }), _jsxs("select", { value: vehicleDraft.truckType, onChange: (e) => setVehicleDraft((c) => ({ ...c, truckType: e.target.value })), children: [_jsx("option", { value: "4.2M", children: "4.2M" }), _jsx("option", { value: "6.8M", children: "6.8M" }), _jsx("option", { value: "9.6M", children: "9.6M" }), _jsx("option", { value: "17.5M", children: "17.5M" })] })] }), _jsxs("label", { children: [_jsx("span", { children: t.vehicleCapacity }), _jsx("input", { value: String(vehicleDraft.maxWeightKg), onChange: (e) => setVehicleDraft((c) => ({ ...c, maxWeightKg: Number(e.target.value) })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.vehicleVolume }), _jsx("input", { value: String(vehicleDraft.maxVolumeM3), onChange: (e) => setVehicleDraft((c) => ({ ...c, maxVolumeM3: Number(e.target.value) })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.formRoadPermitExpiry }), _jsx("input", { value: vehicleDraft.roadPermitExpiry, onChange: (e) => setVehicleDraft((c) => ({ ...c, roadPermitExpiry: e.target.value })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.formAssignedDriver }), _jsx("select", { value: vehicleDraft.assignedDriverId, onChange: (e) => setVehicleDraft((c) => ({ ...c, assignedDriverId: e.target.value })), children: bootstrap.references.drivers.map((driver) => (_jsxs("option", { value: driver.id, children: [driver.id, " / ", driver.name] }, driver.id))) })] }), _jsx("button", { className: "primary-button", type: "submit", disabled: !can('master:manage'), children: editingVehicleId ? t.actionSave : t.actionCreate }), editingVehicleId ? (_jsx("button", { type: "button", className: "filter-button", onClick: resetArchiveDrafts, children: t.actionCancelEdit })) : null] })] })), archiveTab === 'drivers' && (_jsxs(_Fragment, { children: [_jsxs("table", { className: "data-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: t.colId }), _jsx("th", { children: t.formDriverName }), _jsx("th", { children: t.colPhone }), _jsx("th", { children: t.colLicenseNo }), _jsx("th", { children: t.colExpiry }), _jsx("th", { children: t.status }), _jsx("th", { children: t.colActions })] }) }), _jsx("tbody", { children: bootstrap.references.drivers.map((item) => {
+                                                    }) })] }), _jsxs("form", { className: "form-grid", onSubmit: handleSaveVehicle, children: [_jsxs("label", { children: [_jsx("span", { children: t.formPlateNo }), _jsx("input", { required: true, value: vehicleDraft.plateNumber, onChange: (e) => setVehicleDraft((c) => ({ ...c, plateNumber: e.target.value })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.truckType }), _jsxs("select", { value: vehicleDraft.truckType, onChange: (e) => setVehicleDraft((c) => ({ ...c, truckType: e.target.value })), children: [_jsx("option", { value: "4.2M", children: "4.2M" }), _jsx("option", { value: "6.8M", children: "6.8M" }), _jsx("option", { value: "9.6M", children: "9.6M" }), _jsx("option", { value: "17.5M", children: "17.5M" })] })] }), _jsxs("label", { children: [_jsx("span", { children: t.vehicleCapacity }), _jsx("input", { value: String(vehicleDraft.maxWeightKg), onChange: (e) => setVehicleDraft((c) => ({ ...c, maxWeightKg: Number(e.target.value) })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.vehicleVolume }), _jsx("input", { value: String(vehicleDraft.maxVolumeM3), onChange: (e) => setVehicleDraft((c) => ({ ...c, maxVolumeM3: Number(e.target.value) })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.formRoadPermitExpiry }), _jsx("input", { type: "date", required: true, value: vehicleDraft.roadPermitExpiry, onChange: (e) => setVehicleDraft((c) => ({ ...c, roadPermitExpiry: e.target.value })) })] }), _jsxs("label", { children: [_jsx("span", { children: t.formAssignedDriver }), _jsx("select", { value: vehicleDraft.assignedDriverId, onChange: (e) => setVehicleDraft((c) => ({ ...c, assignedDriverId: e.target.value })), children: bootstrap.references.drivers.map((driver) => (_jsxs("option", { value: driver.id, children: [driver.id, " / ", driver.name] }, driver.id))) })] }), _jsx("button", { className: "primary-button", type: "submit", disabled: !can('master:manage'), children: editingVehicleId ? t.actionSave : t.actionCreate }), editingVehicleId ? (_jsx("button", { type: "button", className: "filter-button", onClick: resetArchiveDrafts, children: t.actionCancelEdit })) : null] })] })), archiveTab === 'drivers' && (_jsxs(_Fragment, { children: [_jsxs("table", { className: "data-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: t.colId }), _jsx("th", { children: t.formDriverName }), _jsx("th", { children: t.colPhone }), _jsx("th", { children: t.colLicenseNo }), _jsx("th", { children: t.colExpiry }), _jsx("th", { children: t.status }), _jsx("th", { children: t.colActions })] }) }), _jsx("tbody", { children: bootstrap.references.drivers.map((item) => {
                                                         const warning = warnings.find((w) => w.entityId === item.id && w.entityType === 'DRIVER');
                                                         return (_jsxs("tr", { children: [_jsx("td", { children: item.id }), _jsx("td", { children: item.name }), _jsx("td", { children: item.phone }), _jsx("td", { children: item.licenseNumber }), _jsx("td", { children: item.licenseExpiry }), _jsx("td", { children: warning ? translateStatus(warning.status) : t.normal }), _jsxs("td", { children: [_jsx("button", { type: "button", className: "filter-button", disabled: !can('master:manage'), onClick: () => {
                                                                                 setEditingDriverId(item.id);

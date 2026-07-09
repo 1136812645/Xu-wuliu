@@ -481,12 +481,18 @@ const emptyPartyDraft: Omit<PartyProfile, 'id'> = {
   phone: '',
 };
 
+function buildDefaultRoadPermitExpiry(): string {
+  const date = new Date();
+  date.setFullYear(date.getFullYear() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 const emptyVehicleDraft: Omit<VehicleProfile, 'id'> = {
   plateNumber: '',
   truckType: '9.6M',
   maxWeightKg: 0,
   maxVolumeM3: 0,
-  roadPermitExpiry: '',
+  roadPermitExpiry: buildDefaultRoadPermitExpiry(),
   assignedDriverId: 'driver-1',
 };
 
@@ -1280,9 +1286,23 @@ export function App() {
       setArchiveMessage(t.noPermission);
       return;
     }
+
+    const normalizedPlateNumber = vehicleDraft.plateNumber.trim();
+    const normalizedRoadPermitExpiry = vehicleDraft.roadPermitExpiry.trim();
+    if (!normalizedPlateNumber) {
+      setArchiveMessage(locale === 'en-US' ? 'Please enter plate number before saving.' : '请先填写车牌号后再保存。');
+      return;
+    }
+    if (!normalizedRoadPermitExpiry) {
+      setArchiveMessage(locale === 'en-US' ? 'Please select road permit expiry before saving.' : '请先填写道路运输证到期日后再保存。');
+      return;
+    }
+
     try {
       const payload = {
         ...vehicleDraft,
+        plateNumber: normalizedPlateNumber,
+        roadPermitExpiry: normalizedRoadPermitExpiry,
         maxWeightKg: Number(vehicleDraft.maxWeightKg),
         maxVolumeM3: Number(vehicleDraft.maxVolumeM3),
       };
@@ -2525,7 +2545,7 @@ export function App() {
                   </table>
 
                   <form className="form-grid" onSubmit={handleSaveVehicle}>
-                    <label><span>{t.formPlateNo}</span><input value={vehicleDraft.plateNumber} onChange={(e) => setVehicleDraft((c) => ({ ...c, plateNumber: e.target.value }))} /></label>
+                    <label><span>{t.formPlateNo}</span><input required value={vehicleDraft.plateNumber} onChange={(e) => setVehicleDraft((c) => ({ ...c, plateNumber: e.target.value }))} /></label>
                     <label>
                       <span>{t.truckType}</span>
                       <select value={vehicleDraft.truckType} onChange={(e) => setVehicleDraft((c) => ({ ...c, truckType: e.target.value as VehicleProfile['truckType'] }))}>
@@ -2537,7 +2557,7 @@ export function App() {
                     </label>
                     <label><span>{t.vehicleCapacity}</span><input value={String(vehicleDraft.maxWeightKg)} onChange={(e) => setVehicleDraft((c) => ({ ...c, maxWeightKg: Number(e.target.value) }))} /></label>
                     <label><span>{t.vehicleVolume}</span><input value={String(vehicleDraft.maxVolumeM3)} onChange={(e) => setVehicleDraft((c) => ({ ...c, maxVolumeM3: Number(e.target.value) }))} /></label>
-                    <label><span>{t.formRoadPermitExpiry}</span><input value={vehicleDraft.roadPermitExpiry} onChange={(e) => setVehicleDraft((c) => ({ ...c, roadPermitExpiry: e.target.value }))} /></label>
+                    <label><span>{t.formRoadPermitExpiry}</span><input type="date" required value={vehicleDraft.roadPermitExpiry} onChange={(e) => setVehicleDraft((c) => ({ ...c, roadPermitExpiry: e.target.value }))} /></label>
                     <label>
                       <span>{t.formAssignedDriver}</span>
                       <select value={vehicleDraft.assignedDriverId} onChange={(e) => setVehicleDraft((c) => ({ ...c, assignedDriverId: e.target.value }))}>
