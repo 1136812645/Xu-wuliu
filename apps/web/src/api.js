@@ -127,6 +127,22 @@ export function signWaybill(id, options) {
         },
     });
 }
+export function pickupWaybill(id, options) {
+    return request(`/api/waybills/${id}/pickup`, {
+        method: 'POST',
+        headers: {
+            'x-idempotency-key': options?.idempotencyKey ?? createIdempotencyKey(),
+        },
+    });
+}
+export function startTransitWaybill(id, options) {
+    return request(`/api/waybills/${id}/start-transit`, {
+        method: 'POST',
+        headers: {
+            'x-idempotency-key': options?.idempotencyKey ?? createIdempotencyKey(),
+        },
+    });
+}
 export function uploadPod(id, options) {
     return request(`/api/waybills/${id}/upload-pod`, {
         method: 'POST',

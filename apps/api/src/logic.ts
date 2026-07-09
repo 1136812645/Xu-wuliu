@@ -22,7 +22,7 @@ import type {
   WaybillStatus,
 } from './domain.js';
 
-const WAYBILL_ACTIONS = new Set(['SIGN', 'UPLOAD_POD']);
+const WAYBILL_ACTIONS = new Set(['PICKUP', 'START_TRANSIT', 'SIGN', 'UPLOAD_POD']);
 
 function roundCurrency(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
@@ -456,7 +456,7 @@ export function createWaybill(draft: WaybillDraft, idempotencyKey?: string): Way
  */
 export function transitionWaybill(
   waybillId: string,
-  action: 'SIGN' | 'UPLOAD_POD',
+  action: 'PICKUP' | 'START_TRANSIT' | 'SIGN' | 'UPLOAD_POD',
   idempotencyKey?: string,
 ): WaybillRecord {
   // Status transition is guarded by both action-level and final-status idempotency.
@@ -473,6 +473,33 @@ export function transitionWaybill(
   if (idempotencyStore.has(actionKey)) {
     // Same action key means this transition was already applied or acknowledged before.
     return waybill;
+  }
+
+  if (action === 'PICKUP') {
+    if (
+      waybill.status === 'PICKED_UP'
+      || waybill.status === 'IN_TRANSIT'
+      || waybill.status === 'SIGNED'
+      || waybill.status === 'POD_UPLOADED'
+    ) {
+      // PICKUP is idempotent once the waybill is already at or beyond PICKED_UP.
+      return waybill;
+    }
+    if (waybill.status !== 'ASSIGNED') {
+      throw new Error('Waybill must be assigned before pickup.');
+    }
+    waybill.status = 'PICKED_UP';
+  }
+
+  if (action === 'START_TRANSIT') {
+    if (waybill.status === 'IN_TRANSIT' || waybill.status === 'SIGNED' || waybill.status === 'POD_UPLOADED') {
+      // START_TRANSIT is idempotent once the waybill is already at or beyond IN_TRANSIT.
+      return waybill;
+    }
+    if (waybill.status !== 'PICKED_UP') {
+      throw new Error('Waybill must be picked up before transit.');
+    }
+    waybill.status = 'IN_TRANSIT';
   }
 
   if (action === 'SIGN') {

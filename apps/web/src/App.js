@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { useEffect, useMemo, useState } from 'react';
-import { createCarrier, createDriver, createShipper, createVehicle, deletePricingRule, deleteSettlementAdjustmentRule, createWaybill, devLogin, deleteCarrier, deleteDriver, deleteShipper, deleteVehicle, fetchSettlementAdjustmentRules, fetchAuthConfig, fetchAuthMe, fetchBootstrap, fetchCacheScenarios, fetchDashboard, fetchPricingRules, importWaybillChunk, fetchWarnings, fetchWaybills, loginWithGoogle, loginWithPassword, logout, quoteWaybill, registerWithPassword, savePricingRule, saveSettlementAdjustmentRule, signWaybill, setAuthToken, uploadPod, updateCarrier, updateDriver, updateShipper, updateVehicle, } from './api';
+import { createCarrier, createDriver, createShipper, createVehicle, deletePricingRule, deleteSettlementAdjustmentRule, createWaybill, devLogin, deleteCarrier, deleteDriver, deleteShipper, deleteVehicle, fetchSettlementAdjustmentRules, fetchAuthConfig, fetchAuthMe, fetchBootstrap, fetchCacheScenarios, fetchDashboard, fetchPricingRules, importWaybillChunk, fetchWarnings, fetchWaybills, loginWithGoogle, loginWithPassword, logout, pickupWaybill, quoteWaybill, registerWithPassword, savePricingRule, saveSettlementAdjustmentRule, signWaybill, startTransitWaybill, setAuthToken, uploadPod, updateCarrier, updateDriver, updateShipper, updateVehicle, } from './api';
 const LOCALE_STORAGE_KEY = 'waybill-admin-locale';
 const WAYBILL_PAGE_SIZE = 10;
 const I18N = {
@@ -144,6 +144,8 @@ const I18N = {
         actionDelete: '删除',
         actionSave: '保存',
         actionQuote: '试算校验',
+        actionPickup: '提货',
+        actionStartTransit: '在途',
         actionSign: '签收',
         actionUploadPod: '上传回单',
         actionDupSignTest: '重复签收测试',
@@ -335,6 +337,8 @@ const I18N = {
         actionDelete: 'Delete',
         actionSave: 'Save',
         actionQuote: 'Quote Validate',
+        actionPickup: 'Pickup',
+        actionStartTransit: 'Start Transit',
         actionSign: 'Sign',
         actionUploadPod: 'Upload POD',
         actionDupSignTest: 'Duplicate Sign Test',
@@ -1320,6 +1324,54 @@ export function App() {
             setActionBusyId(null);
         }
     }
+    async function handlePickup(item) {
+        if (!can('waybill:transition')) {
+            setActionMessage(t.noPermission);
+            return;
+        }
+        setActionBusyId(`${item.id}:pickup`);
+        try {
+            const result = await pickupWaybill(item.id);
+            const record = unwrapTransitionRecord(result);
+            upsertWaybillRecord(record);
+            if ('idempotentBlocked' in result) {
+                setActionMessage(result.message);
+            }
+            else {
+                setActionMessage(`${t.actionPickup} success: ${record.waybillNo}`);
+            }
+        }
+        catch (error) {
+            setActionMessage(error instanceof Error ? error.message : t.createFailed);
+        }
+        finally {
+            setActionBusyId(null);
+        }
+    }
+    async function handleStartTransit(item) {
+        if (!can('waybill:transition')) {
+            setActionMessage(t.noPermission);
+            return;
+        }
+        setActionBusyId(`${item.id}:start-transit`);
+        try {
+            const result = await startTransitWaybill(item.id);
+            const record = unwrapTransitionRecord(result);
+            upsertWaybillRecord(record);
+            if ('idempotentBlocked' in result) {
+                setActionMessage(result.message);
+            }
+            else {
+                setActionMessage(`${t.actionStartTransit} success: ${record.waybillNo}`);
+            }
+        }
+        catch (error) {
+            setActionMessage(error instanceof Error ? error.message : t.createFailed);
+        }
+        finally {
+            setActionBusyId(null);
+        }
+    }
     async function handleUploadPod(item) {
         if (!can('pod:upload')) {
             setActionMessage(t.noPermission);
@@ -1496,7 +1548,7 @@ export function App() {
                                                                 })), children: bootstrap.references.vehicles.map((item) => (_jsxs("option", { value: item.id, children: [item.id, " / ", item.plateNumber, " / ", item.truckType] }, item.id))) })) : (_jsx("input", { value: String(draft[field]), onChange: (event) => setDraft((current) => ({
                                                                     ...current,
                                                                     [field]: event.target.value,
-                                                                })) }))] }, field))), _jsx("button", { className: "primary-button", type: "submit", disabled: !can('waybill:create'), children: t.createButton }), _jsx("button", { className: "filter-button", type: "button", onClick: () => void handleQuoteWaybill(), disabled: !can('waybill:create'), children: t.actionQuote }), submitMessage ? _jsx("p", { className: "submit-message", children: submitMessage }) : null] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "section-head", children: [_jsx("h3", { children: t.waybillListTitle }), _jsx("span", { children: t.waybillListHint })] }), _jsxs("table", { className: "data-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: t.waybillNo }), _jsx("th", { children: t.status }), _jsx("th", { children: t.goods }), _jsx("th", { children: t.fieldMileage }), _jsx("th", { children: t.totalFee }), _jsx("th", { children: t.colActions })] }) }), _jsx("tbody", { children: pagedWaybills.map((item) => (_jsxs("tr", { children: [_jsx("td", { children: item.waybillNo }), _jsx("td", { children: translateStatus(item.status) }), _jsx("td", { children: item.goodsName }), _jsx("td", { children: item.mileageKm }), _jsx("td", { children: money(item.totalAmount, locale) }), _jsxs("td", { children: [_jsx("button", { type: "button", className: "filter-button", onClick: () => void handleSign(item), disabled: actionBusyId !== null || !can('waybill:transition'), children: t.actionSign }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleUploadPod(item), disabled: actionBusyId !== null || !can('pod:upload'), children: t.actionUploadPod }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleDuplicateSignTest(item), disabled: actionBusyId !== null || !can('waybill:transition'), children: t.actionDupSignTest }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleDuplicatePodTest(item), disabled: actionBusyId !== null || !can('pod:upload'), children: t.actionDupPodTest })] })] }, item.id))) })] }), _jsxs("div", { className: "pagination-row", children: [_jsx("span", { children: waybillPageSummary }), _jsxs("div", { className: "filter-row", children: [_jsx("button", { type: "button", className: "filter-button", onClick: () => setWaybillPage((current) => Math.max(1, current - 1)), disabled: waybillPage <= 1, children: t.pagePrev }), _jsx("button", { type: "button", className: "filter-button", onClick: () => setWaybillPage((current) => Math.min(waybillPageCount, current + 1)), disabled: waybillPage >= waybillPageCount, children: t.pageNext })] })] }), actionMessage ? _jsx("p", { className: "submit-message", children: actionMessage }) : null] })] }), renderImportSection()] })), active === 'import' && renderImportSection(), active === 'warnings' && (_jsxs("section", { className: "card", children: [_jsxs("div", { className: "section-head", children: [_jsx("h3", { children: t.alertsTitle }), _jsx("span", { children: t.alertsHint })] }), _jsxs("div", { className: "filter-row", children: [_jsx("button", { type: "button", className: warningFilter === 'ALL' ? 'filter-button active' : 'filter-button', onClick: () => setWarningFilter('ALL'), children: t.filterAll }), _jsx("button", { type: "button", className: warningFilter === 'EXPIRED' ? 'filter-button active' : 'filter-button', onClick: () => setWarningFilter('EXPIRED'), children: t.filterExpired })] }), _jsxs("table", { className: "data-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: t.fieldVehicle }), _jsx("th", { children: t.vehicleCapacity }), _jsx("th", { children: t.vehicleVolume }), _jsx("th", { children: t.roadPermit }), _jsx("th", { children: t.driverLicenseExpiry }), _jsx("th", { children: t.status })] }) }), _jsx("tbody", { children: warningRows
+                                                                })) }))] }, field))), _jsx("button", { className: "primary-button", type: "submit", disabled: !can('waybill:create'), children: t.createButton }), _jsx("button", { className: "filter-button", type: "button", onClick: () => void handleQuoteWaybill(), disabled: !can('waybill:create'), children: t.actionQuote }), submitMessage ? _jsx("p", { className: "submit-message", children: submitMessage }) : null] })] }), _jsxs("section", { className: "card", children: [_jsxs("div", { className: "section-head", children: [_jsx("h3", { children: t.waybillListTitle }), _jsx("span", { children: t.waybillListHint })] }), _jsxs("table", { className: "data-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: t.waybillNo }), _jsx("th", { children: t.status }), _jsx("th", { children: t.goods }), _jsx("th", { children: t.fieldMileage }), _jsx("th", { children: t.totalFee }), _jsx("th", { children: t.colActions })] }) }), _jsx("tbody", { children: pagedWaybills.map((item) => (_jsxs("tr", { children: [_jsx("td", { children: item.waybillNo }), _jsx("td", { children: translateStatus(item.status) }), _jsx("td", { children: item.goodsName }), _jsx("td", { children: item.mileageKm }), _jsx("td", { children: money(item.totalAmount, locale) }), _jsxs("td", { children: [_jsx("button", { type: "button", className: "filter-button", onClick: () => void handlePickup(item), disabled: actionBusyId !== null || !can('waybill:transition') || item.status !== 'ASSIGNED', children: t.actionPickup }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleStartTransit(item), disabled: actionBusyId !== null || !can('waybill:transition') || item.status !== 'PICKED_UP', children: t.actionStartTransit }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleSign(item), disabled: actionBusyId !== null || !can('waybill:transition') || item.status !== 'IN_TRANSIT', children: t.actionSign }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleUploadPod(item), disabled: actionBusyId !== null || !can('pod:upload') || item.status !== 'SIGNED', children: t.actionUploadPod }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleDuplicateSignTest(item), disabled: actionBusyId !== null || !can('waybill:transition'), children: t.actionDupSignTest }), _jsx("button", { type: "button", className: "filter-button", onClick: () => void handleDuplicatePodTest(item), disabled: actionBusyId !== null || !can('pod:upload'), children: t.actionDupPodTest })] })] }, item.id))) })] }), _jsxs("div", { className: "pagination-row", children: [_jsx("span", { children: waybillPageSummary }), _jsxs("div", { className: "filter-row", children: [_jsx("button", { type: "button", className: "filter-button", onClick: () => setWaybillPage((current) => Math.max(1, current - 1)), disabled: waybillPage <= 1, children: t.pagePrev }), _jsx("button", { type: "button", className: "filter-button", onClick: () => setWaybillPage((current) => Math.min(waybillPageCount, current + 1)), disabled: waybillPage >= waybillPageCount, children: t.pageNext })] })] }), actionMessage ? _jsx("p", { className: "submit-message", children: actionMessage }) : null] })] }), renderImportSection()] })), active === 'import' && renderImportSection(), active === 'warnings' && (_jsxs("section", { className: "card", children: [_jsxs("div", { className: "section-head", children: [_jsx("h3", { children: t.alertsTitle }), _jsx("span", { children: t.alertsHint })] }), _jsxs("div", { className: "filter-row", children: [_jsx("button", { type: "button", className: warningFilter === 'ALL' ? 'filter-button active' : 'filter-button', onClick: () => setWarningFilter('ALL'), children: t.filterAll }), _jsx("button", { type: "button", className: warningFilter === 'EXPIRED' ? 'filter-button active' : 'filter-button', onClick: () => setWarningFilter('EXPIRED'), children: t.filterExpired })] }), _jsxs("table", { className: "data-table", children: [_jsx("thead", { children: _jsxs("tr", { children: [_jsx("th", { children: t.fieldVehicle }), _jsx("th", { children: t.vehicleCapacity }), _jsx("th", { children: t.vehicleVolume }), _jsx("th", { children: t.roadPermit }), _jsx("th", { children: t.driverLicenseExpiry }), _jsx("th", { children: t.status })] }) }), _jsx("tbody", { children: warningRows
                                             .filter((item) => warningFilter === 'EXPIRED'
                                             ? item.vehicleWarning?.status === 'EXPIRED' || item.driverWarning?.status === 'EXPIRED'
                                             : true)

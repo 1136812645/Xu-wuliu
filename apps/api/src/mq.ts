@@ -3,7 +3,7 @@ import { type ResultSetHeader, type RowDataPacket } from 'mysql2/promise';
 import { dbQuery, isDbEnabled, withDbConnection } from './db.js';
 import * as logger from './logger.js';
 
-type EventOperation = 'CREATE' | 'SIGN' | 'UPLOAD_POD';
+type EventOperation = 'CREATE' | 'PICKUP' | 'START_TRANSIT' | 'SIGN' | 'UPLOAD_POD';
 
 export interface WaybillEvent {
   eventId: string;

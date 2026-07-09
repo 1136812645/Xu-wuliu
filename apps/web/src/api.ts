@@ -171,6 +171,24 @@ export function signWaybill(id: string, options?: { idempotencyKey?: string }) {
   });
 }
 
+export function pickupWaybill(id: string, options?: { idempotencyKey?: string }) {
+  return request<WaybillTransitionResponse>(`/api/waybills/${id}/pickup`, {
+    method: 'POST',
+    headers: {
+      'x-idempotency-key': options?.idempotencyKey ?? createIdempotencyKey(),
+    },
+  });
+}
+
+export function startTransitWaybill(id: string, options?: { idempotencyKey?: string }) {
+  return request<WaybillTransitionResponse>(`/api/waybills/${id}/start-transit`, {
+    method: 'POST',
+    headers: {
+      'x-idempotency-key': options?.idempotencyKey ?? createIdempotencyKey(),
+    },
+  });
+}
+
 export function uploadPod(id: string, options?: { idempotencyKey?: string }) {
   return request<WaybillTransitionResponse>(`/api/waybills/${id}/upload-pod`, {
     method: 'POST',

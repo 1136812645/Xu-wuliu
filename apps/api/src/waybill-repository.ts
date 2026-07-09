@@ -9,6 +9,8 @@ let lastSettlementRuleSyncAt = 0;
 
 type TransitionBlockedReason =
   | 'IDEMPOTENCY_KEY_HIT'
+  | 'ALREADY_PICKED_UP'
+  | 'ALREADY_IN_TRANSIT'
   | 'ALREADY_SIGNED'
   | 'ALREADY_POD_UPLOADED'
   | 'UNIQUE_CONSTRAINT_HIT';
@@ -625,7 +627,7 @@ export async function listRecentWaybillsFromDb(limit = 50): Promise<WaybillRecor
  */
 export async function transitionWaybillInDb(
   waybillId: string,
-  action: 'SIGN' | 'UPLOAD_POD',
+  action: 'PICKUP' | 'START_TRANSIT' | 'SIGN' | 'UPLOAD_POD',
   idempotencyKey?: string,
 ): Promise<TransitionWaybillResult> {
   const month = monthFromDate(new Date());
@@ -663,6 +665,36 @@ export async function transitionWaybillInDb(
       }
 
       let blockedReason: TransitionBlockedReason | undefined;
+      if (action === 'PICKUP') {
+        if (hit.status === 'PICKED_UP' || hit.status === 'IN_TRANSIT' || hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
+          blockedReason = 'ALREADY_PICKED_UP';
+        } else if (hit.status !== 'ASSIGNED') {
+          throw new Error('Waybill must be assigned before pickup.');
+        } else {
+          await conn.query(
+            `UPDATE ${safeShardTable(hit.shardTable)}
+             SET status = 'PICKED_UP'
+             WHERE waybill_no = ?`,
+            [waybillId],
+          );
+        }
+      }
+
+      if (action === 'START_TRANSIT') {
+        if (hit.status === 'IN_TRANSIT' || hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
+          blockedReason = 'ALREADY_IN_TRANSIT';
+        } else if (hit.status !== 'PICKED_UP') {
+          throw new Error('Waybill must be picked up before transit.');
+        } else {
+          await conn.query(
+            `UPDATE ${safeShardTable(hit.shardTable)}
+             SET status = 'IN_TRANSIT'
+             WHERE waybill_no = ?`,
+            [waybillId],
+          );
+        }
+      }
+
       if (action === 'SIGN') {
         if (hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
           blockedReason = 'ALREADY_SIGNED';
@@ -707,7 +739,18 @@ export async function transitionWaybillInDb(
       await conn.query(
         `INSERT INTO waybill_operation_log (waybill_no, operation_type, idempotency_key, operation_result)
          VALUES (?, ?, ?, JSON_OBJECT('status', ?))`,
-        [waybillId, action, operationKey, action === 'SIGN' ? 'SIGNED' : 'POD_UPLOADED'],
+        [
+          waybillId,
+          action,
+          operationKey,
+          action === 'PICKUP'
+            ? 'PICKED_UP'
+            : action === 'START_TRANSIT'
+              ? 'IN_TRANSIT'
+              : action === 'SIGN'
+                ? 'SIGNED'
+                : 'POD_UPLOADED',
+        ],
       );
 
       await conn.commit();

@@ -25,11 +25,13 @@ import {
   loginWithGoogle,
   loginWithPassword,
   logout,
+  pickupWaybill,
   quoteWaybill,
   registerWithPassword,
   savePricingRule,
   saveSettlementAdjustmentRule,
   signWaybill,
+  startTransitWaybill,
   setAuthToken,
   uploadPod,
   updateCarrier,
@@ -217,6 +219,8 @@ const I18N = {
     actionDelete: '删除',
     actionSave: '保存',
     actionQuote: '试算校验',
+    actionPickup: '提货',
+    actionStartTransit: '在途',
     actionSign: '签收',
     actionUploadPod: '上传回单',
     actionDupSignTest: '重复签收测试',
@@ -408,6 +412,8 @@ const I18N = {
     actionDelete: 'Delete',
     actionSave: 'Save',
     actionQuote: 'Quote Validate',
+    actionPickup: 'Pickup',
+    actionStartTransit: 'Start Transit',
     actionSign: 'Sign',
     actionUploadPod: 'Upload POD',
     actionDupSignTest: 'Duplicate Sign Test',
@@ -1509,6 +1515,50 @@ export function App() {
     }
   }
 
+  async function handlePickup(item: WaybillRecord) {
+    if (!can('waybill:transition')) {
+      setActionMessage(t.noPermission);
+      return;
+    }
+    setActionBusyId(`${item.id}:pickup`);
+    try {
+      const result = await pickupWaybill(item.id);
+      const record = unwrapTransitionRecord(result);
+      upsertWaybillRecord(record);
+      if ('idempotentBlocked' in result) {
+        setActionMessage(result.message);
+      } else {
+        setActionMessage(`${t.actionPickup} success: ${record.waybillNo}`);
+      }
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : t.createFailed);
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
+  async function handleStartTransit(item: WaybillRecord) {
+    if (!can('waybill:transition')) {
+      setActionMessage(t.noPermission);
+      return;
+    }
+    setActionBusyId(`${item.id}:start-transit`);
+    try {
+      const result = await startTransitWaybill(item.id);
+      const record = unwrapTransitionRecord(result);
+      upsertWaybillRecord(record);
+      if ('idempotentBlocked' in result) {
+        setActionMessage(result.message);
+      } else {
+        setActionMessage(`${t.actionStartTransit} success: ${record.waybillNo}`);
+      }
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : t.createFailed);
+    } finally {
+      setActionBusyId(null);
+    }
+  }
+
   async function handleUploadPod(item: WaybillRecord) {
     if (!can('pod:upload')) {
       setActionMessage(t.noPermission);
@@ -2159,8 +2209,24 @@ export function App() {
                           <button
                             type="button"
                             className="filter-button"
+                            onClick={() => void handlePickup(item)}
+                            disabled={actionBusyId !== null || !can('waybill:transition') || item.status !== 'ASSIGNED'}
+                          >
+                            {t.actionPickup}
+                          </button>
+                          <button
+                            type="button"
+                            className="filter-button"
+                            onClick={() => void handleStartTransit(item)}
+                            disabled={actionBusyId !== null || !can('waybill:transition') || item.status !== 'PICKED_UP'}
+                          >
+                            {t.actionStartTransit}
+                          </button>
+                          <button
+                            type="button"
+                            className="filter-button"
                             onClick={() => void handleSign(item)}
-                            disabled={actionBusyId !== null || !can('waybill:transition')}
+                            disabled={actionBusyId !== null || !can('waybill:transition') || item.status !== 'IN_TRANSIT'}
                           >
                             {t.actionSign}
                           </button>
@@ -2168,7 +2234,7 @@ export function App() {
                             type="button"
                             className="filter-button"
                             onClick={() => void handleUploadPod(item)}
-                            disabled={actionBusyId !== null || !can('pod:upload')}
+                            disabled={actionBusyId !== null || !can('pod:upload') || item.status !== 'SIGNED'}
                           >
                             {t.actionUploadPod}
                           </button>

@@ -1933,3 +1933,165 @@ app.post('/api/waybills/import/chunk', requirePermission('waybill:create'), asyn
     storage: isDbEnabled() ? 'mysql-sharded' : 'memory',
   });
 });
+
+app.post('/api/waybills/:id/pickup', requirePermission('waybill:transition'), async (req, res) => {
+  const waybillId = String(req.params.id);
+  const idempotencyKey = requireIdempotencyKey(req, res);
+  if (!idempotencyKey) {
+    return;
+  }
+
+  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
+  const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
+  if (idemSnapshot) {
+    return res.status(200).json({
+      idempotentBlocked: true,
+      reason: 'IDEMPOTENCY_KEY_HIT',
+      message: 'Duplicate PICKUP request was blocked by idempotency key.',
+      data: idemSnapshot,
+    });
+  }
+
+  try {
+    const before = isDbEnabled()
+      ? await findWaybillInDb(waybillId)
+      : waybills.find((item) => item.id === waybillId);
+    const wasPickedUpOrBeyond = before
+      ? before.status === 'PICKED_UP' || before.status === 'IN_TRANSIT' || before.status === 'SIGNED' || before.status === 'POD_UPLOADED'
+      : false;
+
+    const transitionResult = isDbEnabled()
+      ? await transitionWaybillInDb(waybillId, 'PICKUP', idempotencyKey)
+      : {
+          waybill: transitionWaybill(waybillId, 'PICKUP', idempotencyKey),
+          idempotentBlocked: wasPickedUpOrBeyond,
+          reason: wasPickedUpOrBeyond ? 'ALREADY_PICKED_UP' : undefined,
+        };
+
+    const waybill = transitionResult.waybill;
+    const shouldPublish = !wasPickedUpOrBeyond && !transitionResult.idempotentBlocked;
+    if (shouldPublish) {
+      const mqResult = await publishWaybillEvent(
+        buildWaybillEvent({
+          waybillId: waybill.id,
+          waybillNo: waybill.waybillNo,
+          status: waybill.status,
+          operation: 'PICKUP',
+          shardTable: waybill.shardTable,
+        }),
+      );
+      if (mqResult.persistedToOutbox) {
+        console.warn(`[MQ] event persisted to outbox for waybill=${waybill.waybillNo}`);
+      }
+    }
+
+    await invalidateHotCaches();
+    await setIdempotencySnapshot(idempotencyKey, waybill);
+    if (shouldPublish) {
+      logger.info('waybill.picked_up', {
+        idempotencyKey,
+        waybillNo: waybill.waybillNo,
+      });
+    }
+
+    if (wasPickedUpOrBeyond || transitionResult.idempotentBlocked) {
+      const reason = transitionResult.reason ?? 'ALREADY_PICKED_UP';
+      const messageByReason: Record<string, string> = {
+        ALREADY_PICKED_UP: 'Duplicate PICKUP operation was ignored because waybill is already picked up or beyond.',
+        IDEMPOTENCY_KEY_HIT: 'Duplicate PICKUP request was blocked by idempotency key.',
+        UNIQUE_CONSTRAINT_HIT: 'Duplicate PICKUP operation was blocked by unique constraint fallback.',
+      };
+      return res.status(200).json({
+        idempotentBlocked: true,
+        reason,
+        message: messageByReason[reason] ?? messageByReason.ALREADY_PICKED_UP,
+        data: waybill,
+      });
+    }
+
+    return res.json(waybill);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
+
+app.post('/api/waybills/:id/start-transit', requirePermission('waybill:transition'), async (req, res) => {
+  const waybillId = String(req.params.id);
+  const idempotencyKey = requireIdempotencyKey(req, res);
+  if (!idempotencyKey) {
+    return;
+  }
+
+  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
+  const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
+  if (idemSnapshot) {
+    return res.status(200).json({
+      idempotentBlocked: true,
+      reason: 'IDEMPOTENCY_KEY_HIT',
+      message: 'Duplicate START_TRANSIT request was blocked by idempotency key.',
+      data: idemSnapshot,
+    });
+  }
+
+  try {
+    const before = isDbEnabled()
+      ? await findWaybillInDb(waybillId)
+      : waybills.find((item) => item.id === waybillId);
+    const wasInTransitOrBeyond = before
+      ? before.status === 'IN_TRANSIT' || before.status === 'SIGNED' || before.status === 'POD_UPLOADED'
+      : false;
+
+    const transitionResult = isDbEnabled()
+      ? await transitionWaybillInDb(waybillId, 'START_TRANSIT', idempotencyKey)
+      : {
+          waybill: transitionWaybill(waybillId, 'START_TRANSIT', idempotencyKey),
+          idempotentBlocked: wasInTransitOrBeyond,
+          reason: wasInTransitOrBeyond ? 'ALREADY_IN_TRANSIT' : undefined,
+        };
+
+    const waybill = transitionResult.waybill;
+    const shouldPublish = !wasInTransitOrBeyond && !transitionResult.idempotentBlocked;
+    if (shouldPublish) {
+      const mqResult = await publishWaybillEvent(
+        buildWaybillEvent({
+          waybillId: waybill.id,
+          waybillNo: waybill.waybillNo,
+          status: waybill.status,
+          operation: 'START_TRANSIT',
+          shardTable: waybill.shardTable,
+        }),
+      );
+      if (mqResult.persistedToOutbox) {
+        console.warn(`[MQ] event persisted to outbox for waybill=${waybill.waybillNo}`);
+      }
+    }
+
+    await invalidateHotCaches();
+    await setIdempotencySnapshot(idempotencyKey, waybill);
+    if (shouldPublish) {
+      logger.info('waybill.in_transit', {
+        idempotencyKey,
+        waybillNo: waybill.waybillNo,
+      });
+    }
+
+    if (wasInTransitOrBeyond || transitionResult.idempotentBlocked) {
+      const reason = transitionResult.reason ?? 'ALREADY_IN_TRANSIT';
+      const messageByReason: Record<string, string> = {
+        ALREADY_IN_TRANSIT: 'Duplicate START_TRANSIT operation was ignored because waybill is already in transit or beyond.',
+        IDEMPOTENCY_KEY_HIT: 'Duplicate START_TRANSIT request was blocked by idempotency key.',
+        UNIQUE_CONSTRAINT_HIT: 'Duplicate START_TRANSIT operation was blocked by unique constraint fallback.',
+      };
+      return res.status(200).json({
+        idempotentBlocked: true,
+        reason,
+        message: messageByReason[reason] ?? messageByReason.ALREADY_IN_TRANSIT,
+        data: waybill,
+      });
+    }
+
+    return res.json(waybill);
+  } catch (error) {
+    return res.status(400).json({ message: error instanceof Error ? error.message : 'Unknown error' });
+  }
+});
