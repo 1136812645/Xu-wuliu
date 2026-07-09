@@ -162,12 +162,15 @@ export async function createShipperInDb(payload: PartyProfile): Promise<PartyPro
 }
 
 export async function updateShipperInDb(id: string, payload: Omit<PartyProfile, 'id'>): Promise<PartyProfile[]> {
-  await dbExecute(
+  const result = await dbExecute(
     `UPDATE shipper
      SET code = ?, name = ?, contact_name = ?, phone = ?
      WHERE id = ?`,
     [payload.code, payload.name, payload.contactName, payload.phone, id],
   );
+  if (result.affectedRows < 1) {
+    throw new Error('Shipper not found.');
+  }
   return listShippersFromDb();
 }
 
@@ -189,12 +192,15 @@ export async function createCarrierInDb(payload: PartyProfile): Promise<PartyPro
 }
 
 export async function updateCarrierInDb(id: string, payload: Omit<PartyProfile, 'id'>): Promise<PartyProfile[]> {
-  await dbExecute(
+  const result = await dbExecute(
     `UPDATE carrier
      SET code = ?, name = ?, contact_name = ?, phone = ?
      WHERE id = ?`,
     [payload.code, payload.name, payload.contactName, payload.phone, id],
   );
+  if (result.affectedRows < 1) {
+    throw new Error('Carrier not found.');
+  }
   return listCarriersFromDb();
 }
 
@@ -216,12 +222,15 @@ export async function createDriverInDb(payload: DriverProfile): Promise<DriverPr
 }
 
 export async function updateDriverInDb(id: string, payload: Omit<DriverProfile, 'id'>): Promise<DriverProfile[]> {
-  await dbExecute(
+  const result = await dbExecute(
     `UPDATE driver
      SET name = ?, phone = ?, license_no = ?, license_expiry = ?
      WHERE id = ?`,
     [payload.name, payload.phone, payload.licenseNumber, payload.licenseExpiry || null, id],
   );
+  if (result.affectedRows < 1) {
+    throw new Error('Driver not found.');
+  }
   return listDriversFromDb();
 }
 
@@ -243,12 +252,15 @@ export async function createVehicleInDb(payload: VehicleProfile): Promise<Vehicl
 }
 
 export async function updateVehicleInDb(id: string, payload: Omit<VehicleProfile, 'id'>): Promise<VehicleProfile[]> {
-  await dbExecute(
+  const result = await dbExecute(
     `UPDATE vehicle
      SET plate_no = ?, truck_type = ?, max_weight_kg = ?, max_volume_m3 = ?, road_permit_expiry = ?, assigned_driver_id = ?
      WHERE id = ?`,
     [payload.plateNumber, payload.truckType, payload.maxWeightKg, payload.maxVolumeM3, payload.roadPermitExpiry || null, payload.assignedDriverId, id],
   );
+  if (result.affectedRows < 1) {
+    throw new Error('Vehicle not found.');
+  }
   return listVehiclesFromDb();
 }
 

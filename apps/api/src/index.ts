@@ -987,6 +987,10 @@ function buildArchiveId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
 }
 
+function isArchiveNotFoundError(error: unknown): boolean {
+  return error instanceof Error && /not found\.$/i.test(error.message);
+}
+
 app.get('/api/archives/shippers/:id', requirePermission('master:manage'), (req, res) => {
   const cacheKey = `shipper:detail:${req.params.id}`;
   void rememberJsonNullable(cacheKey, 30 * 60, 60, () => {
@@ -1152,20 +1156,26 @@ app.put('/api/archives/shippers/:id', requirePermission('master:manage'), async 
     return res.status(400).json({ message: 'Invalid shipper payload.', issues: parsed.error.issues });
   }
 
-  const index = shippers.findIndex((item) => item.id === archiveId);
-  if (index < 0) {
-    return res.status(404).json({ message: 'Shipper not found.' });
-  }
-
-  if (await ensureDbReady()) {
-    const items = await updateShipperInDb(archiveId, parsed.data);
-    shippers.splice(0, shippers.length, ...items);
-    lastArchiveSyncAt = Date.now();
-  } else {
-    shippers[index] = {
-      ...shippers[index],
-      ...parsed.data,
-    };
+  try {
+    if (await ensureDbReady()) {
+      const items = await updateShipperInDb(archiveId, parsed.data);
+      shippers.splice(0, shippers.length, ...items);
+      lastArchiveSyncAt = Date.now();
+    } else {
+      const index = shippers.findIndex((item) => item.id === archiveId);
+      if (index < 0) {
+        return res.status(404).json({ message: 'Shipper not found.' });
+      }
+      shippers[index] = {
+        ...shippers[index],
+        ...parsed.data,
+      };
+    }
+  } catch (error) {
+    if (isArchiveNotFoundError(error)) {
+      return res.status(404).json({ message: 'Shipper not found.' });
+    }
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Unknown error' });
   }
   await invalidateArchiveCaches([`shipper:detail:${archiveId}`]);
   return res.json(shippers.find((item) => item.id === archiveId));
@@ -1199,20 +1209,26 @@ app.put('/api/archives/carriers/:id', requirePermission('master:manage'), async 
     return res.status(400).json({ message: 'Invalid carrier payload.', issues: parsed.error.issues });
   }
 
-  const index = carriers.findIndex((item) => item.id === archiveId);
-  if (index < 0) {
-    return res.status(404).json({ message: 'Carrier not found.' });
-  }
-
-  if (await ensureDbReady()) {
-    const items = await updateCarrierInDb(archiveId, parsed.data);
-    carriers.splice(0, carriers.length, ...items);
-    lastArchiveSyncAt = Date.now();
-  } else {
-    carriers[index] = {
-      ...carriers[index],
-      ...parsed.data,
-    };
+  try {
+    if (await ensureDbReady()) {
+      const items = await updateCarrierInDb(archiveId, parsed.data);
+      carriers.splice(0, carriers.length, ...items);
+      lastArchiveSyncAt = Date.now();
+    } else {
+      const index = carriers.findIndex((item) => item.id === archiveId);
+      if (index < 0) {
+        return res.status(404).json({ message: 'Carrier not found.' });
+      }
+      carriers[index] = {
+        ...carriers[index],
+        ...parsed.data,
+      };
+    }
+  } catch (error) {
+    if (isArchiveNotFoundError(error)) {
+      return res.status(404).json({ message: 'Carrier not found.' });
+    }
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Unknown error' });
   }
   await invalidateArchiveCaches([`carrier:detail:${archiveId}`]);
   return res.json(carriers.find((item) => item.id === archiveId));
@@ -1246,20 +1262,26 @@ app.put('/api/archives/vehicles/:id', requirePermission('master:manage'), async 
     return res.status(400).json({ message: 'Invalid vehicle payload.', issues: parsed.error.issues });
   }
 
-  const index = vehicles.findIndex((item) => item.id === archiveId);
-  if (index < 0) {
-    return res.status(404).json({ message: 'Vehicle not found.' });
-  }
-
-  if (await ensureDbReady()) {
-    const items = await updateVehicleInDb(archiveId, parsed.data);
-    vehicles.splice(0, vehicles.length, ...items);
-    lastArchiveSyncAt = Date.now();
-  } else {
-    vehicles[index] = {
-      ...vehicles[index],
-      ...parsed.data,
-    };
+  try {
+    if (await ensureDbReady()) {
+      const items = await updateVehicleInDb(archiveId, parsed.data);
+      vehicles.splice(0, vehicles.length, ...items);
+      lastArchiveSyncAt = Date.now();
+    } else {
+      const index = vehicles.findIndex((item) => item.id === archiveId);
+      if (index < 0) {
+        return res.status(404).json({ message: 'Vehicle not found.' });
+      }
+      vehicles[index] = {
+        ...vehicles[index],
+        ...parsed.data,
+      };
+    }
+  } catch (error) {
+    if (isArchiveNotFoundError(error)) {
+      return res.status(404).json({ message: 'Vehicle not found.' });
+    }
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Unknown error' });
   }
   await invalidateArchiveCaches([`vehicle:detail:${archiveId}`]);
   return res.json(vehicles.find((item) => item.id === archiveId));
@@ -1293,20 +1315,26 @@ app.put('/api/archives/drivers/:id', requirePermission('master:manage'), async (
     return res.status(400).json({ message: 'Invalid driver payload.', issues: parsed.error.issues });
   }
 
-  const index = drivers.findIndex((item) => item.id === archiveId);
-  if (index < 0) {
-    return res.status(404).json({ message: 'Driver not found.' });
-  }
-
-  if (await ensureDbReady()) {
-    const items = await updateDriverInDb(archiveId, parsed.data);
-    drivers.splice(0, drivers.length, ...items);
-    lastArchiveSyncAt = Date.now();
-  } else {
-    drivers[index] = {
-      ...drivers[index],
-      ...parsed.data,
-    };
+  try {
+    if (await ensureDbReady()) {
+      const items = await updateDriverInDb(archiveId, parsed.data);
+      drivers.splice(0, drivers.length, ...items);
+      lastArchiveSyncAt = Date.now();
+    } else {
+      const index = drivers.findIndex((item) => item.id === archiveId);
+      if (index < 0) {
+        return res.status(404).json({ message: 'Driver not found.' });
+      }
+      drivers[index] = {
+        ...drivers[index],
+        ...parsed.data,
+      };
+    }
+  } catch (error) {
+    if (isArchiveNotFoundError(error)) {
+      return res.status(404).json({ message: 'Driver not found.' });
+    }
+    return res.status(500).json({ message: error instanceof Error ? error.message : 'Unknown error' });
   }
   await invalidateArchiveCaches([`driver:detail:${archiveId}`]);
   return res.json(drivers.find((item) => item.id === archiveId));
