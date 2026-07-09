@@ -134,6 +134,8 @@ const I18N = {
     totalFee: '总费用',
     alertsTitle: '档案与证件预警',
     alertsHint: '红色标记过期/临期数据，非法日期不阻塞页面',
+    warningVehicleModule: '车辆证件预警',
+    warningDriverModule: '司机证件预警',
     filterAll: '全部',
     filterExpired: '仅证件过期',
     remainDays: '天',
@@ -327,6 +329,8 @@ const I18N = {
     totalFee: 'Total Amount',
     alertsTitle: 'Archive & Document Alerts',
     alertsHint: 'Expired or expiring records are highlighted; invalid dates do not block the page.',
+    warningVehicleModule: 'Vehicle Document Alerts',
+    warningDriverModule: 'Driver Document Alerts',
     filterAll: 'All',
     filterExpired: 'Expired Only',
     remainDays: 'days left',
@@ -1068,9 +1072,9 @@ export function App() {
     };
   }, [authUser]);
 
-  const warningRows = useMemo(() => {
+  const warningView = useMemo(() => {
     if (!bootstrap) {
-      return [];
+      return { vehicleRows: [], driverRows: [] };
     }
 
     const vehicleWarningMap = new Map(
@@ -1079,18 +1083,41 @@ export function App() {
     const driverWarningMap = new Map(
       warnings.filter((item) => item.entityType === 'DRIVER').map((item) => [item.entityId, item]),
     );
-
-    return bootstrap.references.vehicles.map((vehicle) => {
-      const driver = bootstrap.references.drivers.find((item) => item.id === vehicle.assignedDriverId);
+    const driverMap = new Map(bootstrap.references.drivers.map((item) => [item.id, item]));
+    const vehicleRows = bootstrap.references.vehicles.map((vehicle) => {
+      const driver = driverMap.get(vehicle.assignedDriverId);
       const vehicleWarning = vehicleWarningMap.get(vehicle.id);
       const driverWarning = driver ? driverWarningMap.get(driver.id) : undefined;
       return {
-        ...vehicle,
+        rowId: `vehicle-${vehicle.id}`,
+        id: vehicle.id,
+        plateNumber: vehicle.plateNumber,
+        maxWeightKg: vehicle.maxWeightKg,
+        maxVolumeM3: vehicle.maxVolumeM3,
+        roadPermitExpiry: vehicle.roadPermitExpiry,
         vehicleWarning,
         driverWarning,
         driver,
       };
     });
+
+    const vehicleByDriverId = new Map(
+      bootstrap.references.vehicles
+        .filter((vehicle) => vehicle.assignedDriverId)
+        .map((vehicle) => [vehicle.assignedDriverId, vehicle]),
+    );
+
+    const driverRows = bootstrap.references.drivers.map((driver) => ({
+        rowId: `driver-${driver.id}`,
+        id: driver.id,
+        name: driver.name,
+        phone: driver.phone,
+        licenseExpiry: driver.licenseExpiry,
+        driverWarning: driverWarningMap.get(driver.id),
+        assignedVehicle: vehicleByDriverId.get(driver.id),
+      }));
+
+    return { vehicleRows, driverRows };
   }, [bootstrap, warnings]);
 
   const waybillPageCount = Math.max(1, Math.ceil(waybills.length / WAYBILL_PAGE_SIZE));
@@ -2319,62 +2346,109 @@ export function App() {
               </button>
             </div>
 
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>{t.fieldVehicle}</th>
-                  <th>{t.vehicleCapacity}</th>
-                  <th>{t.vehicleVolume}</th>
-                  <th>{t.roadPermit}</th>
-                  <th>{t.driverLicenseExpiry}</th>
-                  <th>{t.status}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {warningRows
-                  .filter((item) =>
-                    warningFilter === 'EXPIRED'
-                      ? item.vehicleWarning?.status === 'EXPIRED' || item.driverWarning?.status === 'EXPIRED'
-                      : true,
-                  )
-                  .map((row) => {
-                    const roadPermitStatusText = formatWarningStatusText(row.vehicleWarning, t, translateStatus);
-                    const driverLicenseStatusText = formatWarningStatusText(row.driverWarning, t, translateStatus);
-                    const rowHasAlert =
-                      isAlertWarningStatus(row.vehicleWarning?.status) || isAlertWarningStatus(row.driverWarning?.status);
-                    const roadPermitAlert = isAlertWarningStatus(row.vehicleWarning?.status);
-                    const driverAlert = isAlertWarningStatus(row.driverWarning?.status);
-                    const roadPermitInvalid = row.vehicleWarning?.status === 'INVALID';
-                    const driverInvalid = row.driverWarning?.status === 'INVALID';
+            <div className="two-column warning-split-grid">
+              <article className="warning-module">
+                <h4>{t.warningVehicleModule}</h4>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>{t.fieldVehicle}</th>
+                      <th>{t.vehicleCapacity}</th>
+                      <th>{t.vehicleVolume}</th>
+                      <th>{t.roadPermit}</th>
+                      <th>{t.driverLicenseExpiry}</th>
+                      <th>{t.status}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {warningView.vehicleRows
+                      .filter((item) =>
+                        warningFilter === 'EXPIRED'
+                          ? item.vehicleWarning?.status === 'EXPIRED' || item.driverWarning?.status === 'EXPIRED'
+                          : true,
+                      )
+                      .map((row) => {
+                        const roadPermitStatusText = formatWarningStatusText(row.vehicleWarning, t, translateStatus);
+                        const driverLicenseStatusText = formatWarningStatusText(row.driverWarning, t, translateStatus);
+                        const rowHasAlert =
+                          isAlertWarningStatus(row.vehicleWarning?.status) || isAlertWarningStatus(row.driverWarning?.status);
+                        const roadPermitAlert = isAlertWarningStatus(row.vehicleWarning?.status);
+                        const driverAlert = isAlertWarningStatus(row.driverWarning?.status);
+                        const roadPermitInvalid = row.vehicleWarning?.status === 'INVALID';
+                        const driverInvalid = row.driverWarning?.status === 'INVALID';
 
-                    return (
-                      <tr key={row.id} className={rowHasAlert ? 'warning-row-red' : undefined}>
-                        <td>{row.plateNumber}</td>
-                        <td>{row.maxWeightKg}</td>
-                        <td>{row.maxVolumeM3}</td>
-                        <td>
-                          <span className={roadPermitAlert ? 'warning-status-text alert' : roadPermitInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
-                            {row.roadPermitExpiry} / {roadPermitStatusText}
-                          </span>
-                        </td>
-                        <td>
-                          <span className={driverAlert ? 'warning-status-text alert' : driverInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
-                            {row.driver?.licenseExpiry ?? '-'} / {driverLicenseStatusText}
-                          </span>
-                        </td>
-                        <td>
-                          <div className={roadPermitAlert ? 'warning-status-text alert' : roadPermitInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
-                            {t.roadPermit}: {roadPermitStatusText}
-                          </div>
-                          <div className={driverAlert ? 'warning-status-text alert' : driverInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
-                            {t.driverLicenseExpiry}: {driverLicenseStatusText}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-              </tbody>
-            </table>
+                        return (
+                          <tr key={row.rowId} className={rowHasAlert ? 'warning-row-red' : undefined}>
+                            <td>{row.plateNumber}</td>
+                            <td>{row.maxWeightKg}</td>
+                            <td>{row.maxVolumeM3}</td>
+                            <td>
+                              <span className={roadPermitAlert ? 'warning-status-text alert' : roadPermitInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
+                                {row.roadPermitExpiry} / {roadPermitStatusText}
+                              </span>
+                            </td>
+                            <td>
+                              <span className={driverAlert ? 'warning-status-text alert' : driverInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
+                                {row.driver?.licenseExpiry ?? '-'} / {driverLicenseStatusText}
+                              </span>
+                            </td>
+                            <td>
+                              <div className={roadPermitAlert ? 'warning-status-text alert' : roadPermitInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
+                                {t.roadPermit}: {roadPermitStatusText}
+                              </div>
+                              <div className={driverAlert ? 'warning-status-text alert' : driverInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
+                                {t.driverLicenseExpiry}: {driverLicenseStatusText}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </article>
+
+              <article className="warning-module">
+                <h4>{t.warningDriverModule}</h4>
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>{t.colName}</th>
+                      <th>{t.colPhone}</th>
+                      <th>{t.fieldVehicle}</th>
+                      <th>{t.driverLicenseExpiry}</th>
+                      <th>{t.status}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {warningView.driverRows
+                      .filter((item) => (warningFilter === 'EXPIRED' ? item.driverWarning?.status === 'EXPIRED' : true))
+                      .map((row) => {
+                        const driverLicenseStatusText = formatWarningStatusText(row.driverWarning, t, translateStatus);
+                        const driverAlert = isAlertWarningStatus(row.driverWarning?.status);
+                        const driverInvalid = row.driverWarning?.status === 'INVALID';
+
+                        return (
+                          <tr key={row.rowId} className={driverAlert ? 'warning-row-red' : undefined}>
+                            <td>{row.name}</td>
+                            <td>{row.phone}</td>
+                            <td>{row.assignedVehicle?.plateNumber ?? '-'}</td>
+                            <td>
+                              <span className={driverAlert ? 'warning-status-text alert' : driverInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
+                                {row.licenseExpiry} / {driverLicenseStatusText}
+                              </span>
+                            </td>
+                            <td>
+                              <div className={driverAlert ? 'warning-status-text alert' : driverInvalid ? 'warning-status-text invalid' : 'warning-status-text'}>
+                                {t.driverLicenseExpiry}: {driverLicenseStatusText}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </article>
+            </div>
           </section>
         )}
 
