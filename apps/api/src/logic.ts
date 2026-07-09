@@ -591,11 +591,24 @@ export function getReferenceData() {
   };
 }
 
+export function getReferenceDataForPermissions(permissions: string[]) {
+  const can = (permission: string) => permissions.includes(permission);
+
+  return {
+    shippers: can('waybill:create') || can('master:manage') ? shippers : [],
+    carriers: can('waybill:create') || can('master:manage') ? carriers : [],
+    drivers: can('master:manage') ? drivers : [],
+    vehicles: can('waybill:create') || can('master:manage') ? vehicles : [],
+    pricingRules: can('settlement:view') || can('waybill:create') ? pricingRules : [],
+    settlementAdjustmentRules: can('settlement:view') ? settlementAdjustmentRules : [],
+  };
+}
+
 export function getRolePermissions(): Record<string, string[]> {
   return {
     SHIPPER: ['dashboard:view', 'waybill:create', 'waybill:view', 'settlement:view'],
     CARRIER: ['dashboard:view', 'waybill:view', 'pod:upload'],
-    ADMIN: ['dashboard:view', 'waybill:create', 'waybill:transition', 'master:manage', 'settlement:view', 'report:view'],
+    ADMIN: ['dashboard:view', 'waybill:create', 'waybill:view', 'waybill:transition', 'pod:upload', 'master:manage', 'settlement:view', 'report:view'],
   };
 }
 

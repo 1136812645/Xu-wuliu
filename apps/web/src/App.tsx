@@ -665,7 +665,6 @@ export function App() {
   const [registerForm, setRegisterForm] = useState({
     email: '',
     name: '',
-    role: 'SHIPPER' as AuthUser['role'],
     password: '',
   });
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
@@ -714,6 +713,28 @@ export function App() {
   function can(permission: string): boolean {
     return permissionSet.has(permission);
   }
+
+  const navItems = useMemo(
+    () => [
+      { key: 'overview' as NavKey, label: t.navOverview, visible: can('dashboard:view') },
+      { key: 'waybills' as NavKey, label: t.navWaybills, visible: can('waybill:view') },
+      { key: 'import' as NavKey, label: t.navImport, visible: can('waybill:create') },
+      { key: 'warnings' as NavKey, label: t.navWarnings, visible: can('master:manage') },
+      { key: 'archives' as NavKey, label: t.navArchives, visible: can('master:manage') },
+      { key: 'settlement' as NavKey, label: t.navSettlement, visible: can('settlement:view') },
+      { key: 'architecture' as NavKey, label: t.navArchitecture, visible: can('report:view') },
+    ].filter((item) => item.visible),
+    [t, permissionSet],
+  );
+
+  useEffect(() => {
+    if (navItems.length === 0) {
+      return;
+    }
+    if (!navItems.some((item) => item.key === active)) {
+      setActive(navItems[0].key);
+    }
+  }, [active, navItems]);
 
   useEffect(() => {
     globalThis.localStorage?.setItem(LOCALE_STORAGE_KEY, locale);
@@ -842,7 +863,6 @@ export function App() {
       setRegisterForm({
         email: '',
         name: '',
-        role: 'SHIPPER',
         password: '',
       });
     } catch (error) {
@@ -894,13 +914,14 @@ export function App() {
       try {
         setLoadError('');
         setLoading(true);
-        const [bootstrapData, dashboardData, waybillData, warningData, pricingData, adjustmentData] = await Promise.all([
+        const [bootstrapData, dashboardData, waybillData, warningData, pricingData, adjustmentData, cacheScenarioData] = await Promise.all([
           fetchBootstrap(),
           fetchDashboard(),
-          fetchWaybills(),
-          fetchWarnings(),
-          fetchPricingRules(),
-          fetchSettlementAdjustmentRules(),
+          can('waybill:view') ? fetchWaybills() : Promise.resolve({ items: [], storage: 'memory' }),
+          can('master:manage') ? fetchWarnings() : Promise.resolve({ items: [] }),
+          can('settlement:view') ? fetchPricingRules() : Promise.resolve({ items: [] }),
+          can('settlement:view') ? fetchSettlementAdjustmentRules() : Promise.resolve({ items: [] }),
+          can('report:view') ? fetchCacheScenarios() : Promise.resolve(null),
         ]);
         if (!cancelled) {
           setBootstrap(bootstrapData);
@@ -909,7 +930,7 @@ export function App() {
           setWarnings(warningData.items);
           setPricingRuleDrafts(pricingData.items.map((rule) => toPricingRuleDraft(rule)));
           setSettlementAdjustmentDrafts(adjustmentData.items.map((rule) => toSettlementAdjustmentDraft(rule)));
-          void fetchCacheScenarios().then((data) => setCacheScenarios(data)).catch(() => {});
+          setCacheScenarios(cacheScenarioData);
         }
       } catch (error) {
         if (!cancelled) {
@@ -968,17 +989,18 @@ export function App() {
   }, [waybillPageCount]);
 
   async function reloadReferences() {
-    const [bootstrapData, warningData, pricingData, adjustmentData] = await Promise.all([
+    const [bootstrapData, warningData, pricingData, adjustmentData, cacheScenarioData] = await Promise.all([
       fetchBootstrap(),
-      fetchWarnings(),
-      fetchPricingRules(),
-      fetchSettlementAdjustmentRules(),
+      can('master:manage') ? fetchWarnings() : Promise.resolve({ items: [] }),
+      can('settlement:view') ? fetchPricingRules() : Promise.resolve({ items: [] }),
+      can('settlement:view') ? fetchSettlementAdjustmentRules() : Promise.resolve({ items: [] }),
+      can('report:view') ? fetchCacheScenarios() : Promise.resolve(null),
     ]);
     setBootstrap(bootstrapData);
     setWarnings(warningData.items);
     setPricingRuleDrafts(pricingData.items.map((rule) => toPricingRuleDraft(rule)));
     setSettlementAdjustmentDrafts(adjustmentData.items.map((rule) => toSettlementAdjustmentDraft(rule)));
-    void fetchCacheScenarios().then((data) => setCacheScenarios(data)).catch(() => {});
+    setCacheScenarios(cacheScenarioData);
   }
 
   async function handleSavePricingRule(rule: PricingRuleDraft) {
@@ -1488,6 +1510,10 @@ export function App() {
   }
 
   function renderImportSection() {
+    if (!can('waybill:create')) {
+      return null;
+    }
+
     return (
       <section className="card">
         <div className="section-head">
@@ -1634,19 +1660,6 @@ export function App() {
                   />
                 </label>
                 <label>
-                  <span>{t.devRole}</span>
-                  <select
-                    value={registerForm.role}
-                    onChange={(event) =>
-                      setRegisterForm((current) => ({ ...current, role: event.target.value as AuthUser['role'] }))
-                    }
-                  >
-                    <option value="ADMIN">ADMIN</option>
-                    <option value="SHIPPER">SHIPPER</option>
-                    <option value="CARRIER">CARRIER</option>
-                  </select>
-                </label>
-                <label>
                   <span>{t.password}</span>
                   <input
                     type="password"
@@ -1735,20 +1748,12 @@ export function App() {
         </div>
 
         <nav className="nav-list">
-          {[
-            ['overview', t.navOverview],
-            ['waybills', t.navWaybills],
-            ['import', t.navImport],
-            ['warnings', t.navWarnings],
-            ['archives', t.navArchives],
-            ['settlement', t.navSettlement],
-            ['architecture', t.navArchitecture],
-          ].map(([key, label]) => (
+          {navItems.map(({ key, label }) => (
             <button
               key={key}
               type="button"
               className={active === key ? 'nav-item active' : 'nav-item'}
-              onClick={() => setActive(key as NavKey)}
+              onClick={() => setActive(key)}
             >
               {label}
             </button>
@@ -1947,7 +1952,7 @@ export function App() {
                     </label>
                   ))}
                   <button className="primary-button" type="submit" disabled={!can('waybill:create')}>{t.createButton}</button>
-                  <button className="filter-button" type="button" onClick={() => void handleQuoteWaybill()}>
+                  <button className="filter-button" type="button" onClick={() => void handleQuoteWaybill()} disabled={!can('waybill:create')}>
                     {t.actionQuote}
                   </button>
                   {submitMessage ? <p className="submit-message">{submitMessage}</p> : null}

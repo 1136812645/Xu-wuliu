@@ -23,7 +23,7 @@ import {
   createWaybill,
   deletePricingRule,
   deleteSettlementAdjustmentRule,
-  getReferenceData,
+  getReferenceDataForPermissions,
   getRolePermissions,
   listSettlementAdjustmentRules,
   getStatusFlow,
@@ -311,7 +311,6 @@ const devLoginSchema = z.object({
 const passwordRegisterSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
-  role: z.enum(['ADMIN', 'SHIPPER', 'CARRIER']).default('SHIPPER'),
   password: z.string().min(8).max(72),
 });
 
@@ -470,7 +469,7 @@ app.post('/api/auth/register', async (req, res) => {
     const account = await createPasswordUser({
       email: parsed.data.email,
       name: parsed.data.name,
-      role: parsed.data.role,
+      role: 'SHIPPER',
       passwordHash,
     });
 
@@ -595,8 +594,13 @@ app.get('/api/ha/instance', (_req, res) => {
   res.json({ instanceId, status: 'running' });
 });
 
-app.get('/api/bootstrap', (_req, res) => {
-  void rememberJson('cache:bootstrap:v1', 30 * 60, () => ({
+app.get('/api/bootstrap', requirePermission('dashboard:view'), (req, res) => {
+  const user = readSessionUser(req);
+  if (!user) {
+    return res.status(401).json({ message: 'Unauthorized. Please login first.' });
+  }
+
+  void rememberJson(`cache:bootstrap:v1:${user.role}`, 30 * 60, () => ({
     system: {
       name: 'Waybill & Settlement Admin',
       locales: ['zh-CN', 'en-US'],
@@ -605,7 +609,7 @@ app.get('/api/bootstrap', (_req, res) => {
     },
     permissions: getRolePermissions(),
     statusFlow: getStatusFlow(),
-    references: getReferenceData(),
+    references: getReferenceDataForPermissions(user.permissions),
   }))
     .then(({ value, hit }) => {
       res.setHeader('x-cache-hit', hit ? '1' : '0');
@@ -616,7 +620,7 @@ app.get('/api/bootstrap', (_req, res) => {
     });
 });
 
-app.get('/api/dashboard', (_req, res) => {
+app.get('/api/dashboard', requirePermission('dashboard:view'), (_req, res) => {
   void (async () => {
     try {
       if (await ensureDbReady()) {
@@ -634,7 +638,7 @@ app.get('/api/dashboard', (_req, res) => {
   })();
 });
 
-app.get('/api/waybills', async (_req, res) => {
+app.get('/api/waybills', requirePermission('waybill:view'), async (_req, res) => {
   if (!(await ensureDbReady())) {
     return res.json({ items: waybills, storage: 'memory' });
   }
@@ -648,11 +652,11 @@ app.get('/api/waybills', async (_req, res) => {
   }
 });
 
-app.get('/api/warnings', (_req, res) => {
+app.get('/api/warnings', requirePermission('master:manage'), (_req, res) => {
   res.json({ items: buildDocumentWarnings() });
 });
 
-app.get('/api/pricing-rules', async (_req, res) => {
+app.get('/api/pricing-rules', requirePermission('settlement:view'), async (_req, res) => {
   try {
     if (isDbEnabled()) {
       const rows = await listPricingRulesFromDb();
@@ -757,7 +761,7 @@ app.delete('/api/pricing-rules/:id', requirePermission('master:manage'), async (
   }
 });
 
-app.get('/api/mq/status', (_req, res) => {
+app.get('/api/mq/status', requirePermission('report:view'), (_req, res) => {
   res.json(getMqRuntimeStatus());
 });
 
@@ -839,7 +843,7 @@ app.post('/api/mq/outbox/flush', requirePermission('report:view'), async (_req, 
   res.json(result);
 });
 
-app.get('/api/cache/status', async (_req, res) => {
+app.get('/api/cache/status', requirePermission('report:view'), async (_req, res) => {
   const [bootstrap, dashboard, recentWaybills] = await Promise.all([
     cacheHasKey('cache:bootstrap:v1'),
     cacheHasKey('cache:dashboard:v1'),
@@ -871,7 +875,7 @@ function buildArchiveId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
 }
 
-app.get('/api/archives/shippers/:id', (req, res) => {
+app.get('/api/archives/shippers/:id', requirePermission('master:manage'), (req, res) => {
   const cacheKey = `shipper:detail:${req.params.id}`;
   void rememberJsonNullable(cacheKey, 30 * 60, 60, () => {
     const item = shippers.find((row) => row.id === req.params.id);
@@ -889,7 +893,7 @@ app.get('/api/archives/shippers/:id', (req, res) => {
     });
 });
 
-app.get('/api/archives/carriers/:id', (req, res) => {
+app.get('/api/archives/carriers/:id', requirePermission('master:manage'), (req, res) => {
   const cacheKey = `carrier:detail:${req.params.id}`;
   void rememberJsonNullable(cacheKey, 30 * 60, 60, () => {
     const item = carriers.find((row) => row.id === req.params.id);
@@ -907,7 +911,7 @@ app.get('/api/archives/carriers/:id', (req, res) => {
     });
 });
 
-app.get('/api/archives/vehicles/:id', (req, res) => {
+app.get('/api/archives/vehicles/:id', requirePermission('master:manage'), (req, res) => {
   const cacheKey = `vehicle:detail:${req.params.id}`;
   void rememberJsonNullable(cacheKey, 30 * 60, 60, () => {
     const item = vehicles.find((row) => row.id === req.params.id);
@@ -925,7 +929,7 @@ app.get('/api/archives/vehicles/:id', (req, res) => {
     });
 });
 
-app.get('/api/archives/drivers/:id', (req, res) => {
+app.get('/api/archives/drivers/:id', requirePermission('master:manage'), (req, res) => {
   const cacheKey = `driver:detail:${req.params.id}`;
   void rememberJsonNullable(cacheKey, 30 * 60, 60, () => {
     const item = drivers.find((row) => row.id === req.params.id);
@@ -943,7 +947,7 @@ app.get('/api/archives/drivers/:id', (req, res) => {
     });
 });
 
-app.get('/api/cache/scenarios', async (_req, res) => {
+app.get('/api/cache/scenarios', requirePermission('report:view'), async (_req, res) => {
   const [
     shipperDetailCount,
     carrierDetailCount,
@@ -1209,7 +1213,7 @@ app.delete('/api/archives/drivers/:id', requirePermission('master:manage'), asyn
   return res.json(removed);
 });
 
-app.post('/api/waybills/quote', (req, res) => {
+app.post('/api/waybills/quote', requirePermission('waybill:create'), (req, res) => {
   const parsed = waybillDraftSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid draft payload.', issues: parsed.error.issues });
@@ -1568,7 +1572,7 @@ app.listen(port, () => {
   void startWaybillConsumer();
 });
 
-app.get('/api/settlement-adjustments', (_req, res) => {
+app.get('/api/settlement-adjustments', requirePermission('settlement:view'), (_req, res) => {
   void (async () => {
     if (isDbEnabled()) {
       const items = await listSettlementAdjustmentRulesFromDb();
@@ -1634,7 +1638,7 @@ app.delete('/api/settlement-adjustments/:id', requirePermission('master:manage')
   }
 });
 
-app.post('/api/waybills/import/chunk', async (req, res) => {
+app.post('/api/waybills/import/chunk', requirePermission('waybill:create'), async (req, res) => {
   const parsed = importChunkSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ message: 'Invalid import chunk payload.', issues: parsed.error.issues });
