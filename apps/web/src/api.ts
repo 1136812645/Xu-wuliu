@@ -112,7 +112,7 @@ export function loginWithPassword(payload: { email: string; password: string }) 
   });
 }
 
-export function devLogin(payload: { email: string; name: string; role: AuthUser['role'] }) {
+export function devLogin(payload: { email: string; password: string; role: AuthUser['role'] }) {
   return request<{ token: string; user: AuthUser }>('/api/auth/dev-login', {
     method: 'POST',
     body: JSON.stringify(payload),

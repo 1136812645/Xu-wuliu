@@ -665,7 +665,7 @@ export function App() {
   const [googleRetrySeed, setGoogleRetrySeed] = useState(0);
   const [devLoginForm, setDevLoginForm] = useState({
     email: 'admin@example.com',
-    name: 'Admin User',
+    password: '123456',
     role: 'ADMIN' as AuthUser['role'],
   });
   const [passwordLoginForm, setPasswordLoginForm] = useState({
@@ -1777,10 +1777,12 @@ export function App() {
                   />
                 </label>
                 <label>
-                  <span>{t.devName}</span>
+                  <span>{t.password}</span>
                   <input
-                    value={devLoginForm.name}
-                    onChange={(event) => setDevLoginForm((current) => ({ ...current, name: event.target.value }))}
+                    type="password"
+                    placeholder={t.passwordHint}
+                    value={devLoginForm.password}
+                    onChange={(event) => setDevLoginForm((current) => ({ ...current, password: event.target.value }))}
                   />
                 </label>
                 <label>

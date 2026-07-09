@@ -111,6 +111,7 @@ const rolePermissions = getRolePermissions();
 const authClient = new OAuth2Client();
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim() || '';
 const devLoginEnabled = process.env.DEV_LOGIN_ENABLED !== '0';
+const devLoginPassword = process.env.DEV_LOGIN_PASSWORD?.trim() || '123456';
 const authSessionTtlMs = 8 * 60 * 60 * 1000;
 const authSessionSecret = process.env.AUTH_SESSION_SECRET?.trim() || 'waybill-auth-session-secret';
 const adminEmailSet = new Set(
@@ -332,7 +333,7 @@ const googleLoginSchema = z.object({
 
 const devLoginSchema = z.object({
   email: z.string().email(),
-  name: z.string().min(1),
+  password: z.string().min(1),
   role: z.enum(['ADMIN', 'SHIPPER', 'CARRIER']),
 });
 
@@ -453,7 +454,7 @@ app.post('/api/auth/logout', (req, res) => {
   return res.json({ ok: true });
 });
 
-app.post('/api/auth/dev-login', (req, res) => {
+app.post('/api/auth/dev-login', async (req, res) => {
   if (!devLoginEnabled) {
     return res.status(403).json({ message: 'Dev login is disabled.' });
   }
@@ -463,11 +464,51 @@ app.post('/api/auth/dev-login', (req, res) => {
     return res.status(400).json({ message: 'Invalid dev login payload.', issues: parsed.error.issues });
   }
 
+  let dbAccount: Awaited<ReturnType<typeof findAuthUserByEmail>> | null = null;
+
+  if (isDbEnabled()) {
+    try {
+      await ensureAuthUserTable();
+      dbAccount = await findAuthUserByEmail(parsed.data.email);
+      if (dbAccount?.passwordHash) {
+        const passOk = await verifyPassword(parsed.data.password, dbAccount.passwordHash);
+        if (!passOk) {
+          if (parsed.data.password !== devLoginPassword) {
+            return res.status(401).json({ message: 'Invalid email or password.' });
+          }
+        } else {
+          await touchAuthUserLogin(dbAccount.id);
+          const user = toAuthUser({
+            id: dbAccount.id,
+            email: dbAccount.email,
+            name: dbAccount.name,
+            role: parsed.data.role,
+            pictureUrl: dbAccount.pictureUrl,
+          });
+          const token = issueSession(user);
+          return res.json({ token, user });
+        }
+      }
+    } catch (error) {
+      logger.error('auth.dev_login_failed', {
+        error: error instanceof Error ? error.message : 'unknown',
+      });
+      return res.status(500).json({ message: error instanceof Error ? error.message : 'Unknown error' });
+    }
+  }
+
+  if (parsed.data.password !== devLoginPassword) {
+    return res.status(401).json({ message: 'Invalid email or password.' });
+  }
+
+  const fallbackName = dbAccount?.name ?? (parsed.data.email.split('@')[0] || 'Dev User');
+
   const user = toAuthUser({
-    id: `dev:${parsed.data.email}`,
-    email: parsed.data.email,
-    name: parsed.data.name,
+    id: dbAccount?.id ?? `dev:${parsed.data.email}`,
+    email: dbAccount?.email ?? parsed.data.email,
+    name: fallbackName,
     role: parsed.data.role,
+    pictureUrl: dbAccount?.pictureUrl,
   });
   const token = issueSession(user);
   return res.json({ token, user });
