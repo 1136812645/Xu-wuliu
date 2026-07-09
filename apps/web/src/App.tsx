@@ -659,7 +659,7 @@ export function App() {
     role: 'ADMIN' as AuthUser['role'],
   });
   const [passwordLoginForm, setPasswordLoginForm] = useState({
-    email: 'admin@example.com',
+    email: '1806909748@qq.com',
     password: '',
   });
   const [registerForm, setRegisterForm] = useState({

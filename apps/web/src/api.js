@@ -41,7 +41,16 @@ async function request(path, init) {
     });
     if (!response.ok) {
         const body = await response.json().catch(() => ({ message: 'Request failed.' }));
-        throw new Error(body.message ?? 'Request failed.');
+        const issueText = Array.isArray(body.issues)
+            ? body.issues
+                .map((issue) => {
+                const path = Array.isArray(issue.path) && issue.path.length > 0 ? `${issue.path.join('.')}: ` : '';
+                return `${path}${issue.message ?? 'invalid value'}`;
+            })
+                .join('; ')
+            : '';
+        const message = issueText ? `${body.message ?? 'Request failed.'} ${issueText}` : body.message ?? 'Request failed.';
+        throw new Error(message);
     }
     return response.json();
 }

@@ -547,7 +547,7 @@ export function App() {
         role: 'ADMIN',
     });
     const [passwordLoginForm, setPasswordLoginForm] = useState({
-        email: 'admin@example.com',
+        email: '1806909748@qq.com',
         password: '',
     });
     const [registerForm, setRegisterForm] = useState({
