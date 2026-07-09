@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { z } from 'zod';
 import type { PricingRule } from './domain.js';
@@ -82,7 +82,7 @@ type AuthUser = {
   permissions: string[];
 };
 
-type SessionValue = {
+type SessionTokenPayload = {
   user: AuthUser;
   expiresAt: number;
 };
@@ -108,11 +108,11 @@ app.use((req, _res, next) => {
 });
 
 const rolePermissions = getRolePermissions();
-const sessions = new Map<string, SessionValue>();
 const authClient = new OAuth2Client();
 const googleClientId = process.env.GOOGLE_CLIENT_ID?.trim() || '';
 const devLoginEnabled = process.env.DEV_LOGIN_ENABLED !== '0';
 const authSessionTtlMs = 8 * 60 * 60 * 1000;
+const authSessionSecret = process.env.AUTH_SESSION_SECRET?.trim() || 'waybill-auth-session-secret';
 const adminEmailSet = new Set(
   (process.env.GOOGLE_ADMIN_EMAILS ?? '')
     .split(',')
@@ -146,13 +146,26 @@ function resolveRoleByEmail(email: string): UserRole {
   return 'SHIPPER';
 }
 
+function encodeTokenSegment(input: string): string {
+  return Buffer.from(input, 'utf8').toString('base64url');
+}
+
+function decodeTokenSegment(input: string): string {
+  return Buffer.from(input, 'base64url').toString('utf8');
+}
+
+function signSessionPayload(payload: string): string {
+  return createHmac('sha256', authSessionSecret).update(payload).digest('base64url');
+}
+
 function issueSession(user: AuthUser): string {
-  const token = randomUUID();
-  sessions.set(token, {
+  const session: SessionTokenPayload = {
     user,
     expiresAt: Date.now() + authSessionTtlMs,
-  });
-  return token;
+  };
+  const payload = encodeTokenSegment(JSON.stringify(session));
+  const signature = signSessionPayload(payload);
+  return `${payload}.${signature}`;
 }
 
 function extractAuthToken(req: express.Request): string | null {
@@ -168,12 +181,27 @@ function readSessionUser(req: express.Request): AuthUser | null {
   if (!token) {
     return null;
   }
-  const session = sessions.get(token);
-  if (!session) {
+
+  const [payloadSegment, signatureSegment] = token.split('.');
+  if (!payloadSegment || !signatureSegment) {
     return null;
   }
+
+  const expectedSignature = signSessionPayload(payloadSegment);
+  const providedBuffer = Buffer.from(signatureSegment, 'utf8');
+  const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+  if (providedBuffer.length !== expectedBuffer.length || !timingSafeEqual(providedBuffer, expectedBuffer)) {
+    return null;
+  }
+
+  let session: SessionTokenPayload;
+  try {
+    session = JSON.parse(decodeTokenSegment(payloadSegment)) as SessionTokenPayload;
+  } catch {
+    return null;
+  }
+
   if (session.expiresAt <= Date.now()) {
-    sessions.delete(token);
     return null;
   }
   return session.user;
@@ -422,10 +450,6 @@ app.get('/api/auth/me', (req, res) => {
 });
 
 app.post('/api/auth/logout', (req, res) => {
-  const token = extractAuthToken(req);
-  if (token) {
-    sessions.delete(token);
-  }
   return res.json({ ok: true });
 });
 
