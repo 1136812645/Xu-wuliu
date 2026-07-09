@@ -596,6 +596,21 @@ function toSettlementAdjustmentDraft(rule: SettlementAdjustmentRule): Settlement
   };
 }
 
+function buildSettlementAdjustmentCode(rule: Pick<SettlementAdjustmentRuleDraft, 'code' | 'label' | 'category' | 'mode'>): string {
+  const trimmedCode = rule.code.trim();
+  if (trimmedCode) {
+    return trimmedCode;
+  }
+
+  const labelPart = rule.label
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
+  const base = ['ADJ', rule.category, rule.mode, labelPart].filter(Boolean).join('_');
+  return `${base || 'ADJ'}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
+}
+
 function parseDraftNumber(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -618,6 +633,7 @@ function toPricingRulePayload(rule: PricingRuleDraft): PricingRule {
 function toSettlementAdjustmentPayload(rule: SettlementAdjustmentRuleDraft): SettlementAdjustmentRule {
   return {
     ...rule,
+    code: buildSettlementAdjustmentCode(rule),
     value: parseDraftNumber(rule.value, 'value'),
   };
 }
@@ -3182,7 +3198,11 @@ export function App() {
               <form className="form-grid" onSubmit={handleSaveSettlementAdjustment}>
                 <label>
                   <span>{t.settlementCode}</span>
-                  <input value={settlementAdjustmentDraft.code} onChange={(event) => setSettlementAdjustmentDraft((current) => ({ ...current, code: event.target.value }))} />
+                  <input
+                    value={settlementAdjustmentDraft.code}
+                    placeholder={locale === 'zh-CN' ? '留空自动生成' : 'Leave blank to auto-generate'}
+                    onChange={(event) => setSettlementAdjustmentDraft((current) => ({ ...current, code: event.target.value }))}
+                  />
                 </label>
                 <label>
                   <span>{t.settlementLabel}</span>

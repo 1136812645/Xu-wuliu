@@ -157,10 +157,25 @@ function normalizeRule(rule: PricingRule): PricingRule {
   };
 }
 
+function buildSettlementAdjustmentCode(rule: Pick<SettlementAdjustmentRule, 'code' | 'label' | 'category' | 'mode'>): string {
+  const trimmedCode = rule.code.trim();
+  if (trimmedCode) {
+    return trimmedCode;
+  }
+
+  const labelPart = rule.label
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
+  const base = ['ADJ', rule.category, rule.mode, labelPart].filter(Boolean).join('_');
+  return `${base || 'ADJ'}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`.toUpperCase();
+}
+
 function normalizeSettlementAdjustmentRule(rule: SettlementAdjustmentRule): SettlementAdjustmentRule {
   return {
     id: rule.id,
-    code: rule.code.trim(),
+    code: buildSettlementAdjustmentCode(rule),
     label: rule.label.trim(),
     category: rule.category,
     mode: rule.mode,
@@ -213,9 +228,6 @@ export function replaceSettlementAdjustmentRules(nextRules: SettlementAdjustment
 
 export function upsertSettlementAdjustmentRule(rule: SettlementAdjustmentRule, index?: number): SettlementAdjustmentRule[] {
   const normalized = normalizeSettlementAdjustmentRule(rule);
-  if (!normalized.code) {
-    throw new Error('Adjustment rule code is required.');
-  }
   if (!normalized.label) {
     throw new Error('Adjustment rule label is required.');
   }

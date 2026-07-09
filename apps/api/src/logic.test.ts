@@ -85,6 +85,26 @@ describe('waybill logic', () => {
     expect(result.totalAmount).toBe(3583.3);
   });
 
+  it('auto-generates a settlement adjustment code when the draft code is blank', () => {
+    upsertSettlementAdjustmentRule({
+      code: '   ',
+      label: 'Night loading surcharge',
+      category: 'LOADING',
+      mode: 'FIXED',
+      value: 35,
+      enabled: true,
+      shipperId: 'shipper-1',
+    });
+
+    expect(settlementAdjustmentRules).toHaveLength(1);
+    expect(settlementAdjustmentRules[0].code).toMatch(/^ADJ_LOADING_FIXED_/);
+
+    const result = calculateFees(baseDraft);
+    expect(result.fees).toEqual(
+      expect.arrayContaining([expect.objectContaining({ label: expect.stringContaining('/ ADJ_LOADING_FIXED_'), amount: 35 })]),
+    );
+  });
+
   it('calculates mixed positive and negative fees with two-decimal precision', () => {
     const result = calculateFees(baseDraft);
 

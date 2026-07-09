@@ -275,7 +275,7 @@ const pricingRuleSchema = z.object({
 
 const settlementAdjustmentRuleSchema = z.object({
   id: z.number().int().positive().optional(),
-  code: z.string().min(1),
+  code: z.string().trim(),
   label: z.string().min(1),
   category: z.enum(['LOADING', 'DEDUCTION']),
   mode: z.enum(['FIXED', 'LINE_HAUL_RATE']),
