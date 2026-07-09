@@ -33,9 +33,10 @@ function createPayload() {
 }
 
 async function devLogin(role, email, name) {
+  const password = process.env.DEV_LOGIN_PASSWORD ?? '123456';
   const response = await requestJson('/api/auth/dev-login', {
     method: 'POST',
-    body: JSON.stringify({ role, email, name }),
+    body: JSON.stringify({ role, email, name, password }),
   });
 
   if (response.status !== 200 || !response.body?.token) {
@@ -331,7 +332,7 @@ async function main() {
   const connection = await mysql.createConnection(dbConfig);
   try {
     const results = [];
-    for (const count of [50, 200]) {
+    for (const count of [50, 100, 200]) {
       results.push({
         concurrency: count,
         summary: await runPhase(connection, count, adminToken, carrierToken),
