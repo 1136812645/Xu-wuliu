@@ -311,6 +311,7 @@ const devLoginSchema = z.object({
 const passwordRegisterSchema = z.object({
   email: z.string().email(),
   name: z.string().min(1),
+  role: z.enum(['SHIPPER', 'CARRIER']).default('SHIPPER'),
   password: z.string().min(8).max(72),
 });
 
@@ -469,7 +470,7 @@ app.post('/api/auth/register', async (req, res) => {
     const account = await createPasswordUser({
       email: parsed.data.email,
       name: parsed.data.name,
-      role: 'SHIPPER',
+      role: parsed.data.role,
       passwordHash,
     });
 

@@ -665,6 +665,7 @@ export function App() {
   const [registerForm, setRegisterForm] = useState({
     email: '',
     name: '',
+    role: 'SHIPPER' as Extract<AuthUser['role'], 'SHIPPER' | 'CARRIER'>,
     password: '',
   });
   const [bootstrap, setBootstrap] = useState<BootstrapPayload | null>(null);
@@ -888,6 +889,7 @@ export function App() {
       setRegisterForm({
         email: '',
         name: '',
+        role: 'SHIPPER',
         password: '',
       });
     } catch (error) {
@@ -1659,6 +1661,21 @@ export function App() {
                     value={passwordLoginForm.email}
                     onChange={(event) => setPasswordLoginForm((current) => ({ ...current, email: event.target.value }))}
                   />
+                </label>
+                <label>
+                  <span>{t.devRole}</span>
+                  <select
+                    value={registerForm.role}
+                    onChange={(event) =>
+                      setRegisterForm((current) => ({
+                        ...current,
+                        role: event.target.value as Extract<AuthUser['role'], 'SHIPPER' | 'CARRIER'>,
+                      }))
+                    }
+                  >
+                    <option value="SHIPPER">SHIPPER</option>
+                    <option value="CARRIER">CARRIER</option>
+                  </select>
                 </label>
                 <label>
                   <span>{t.password}</span>

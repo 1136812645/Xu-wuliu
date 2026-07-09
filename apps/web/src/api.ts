@@ -89,7 +89,7 @@ export function loginWithGoogle(credential: string) {
   });
 }
 
-export function registerWithPassword(payload: { email: string; name: string; password: string }) {
+export function registerWithPassword(payload: { email: string; name: string; role: Extract<AuthUser['role'], 'SHIPPER' | 'CARRIER'>; password: string }) {
   return request<{ token: string; user: AuthUser }>('/api/auth/register', {
     method: 'POST',
     body: JSON.stringify(payload),
