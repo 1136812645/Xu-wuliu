@@ -48,18 +48,19 @@ function splitAmount(total: number, parts: number): number[] {
   const totalCents = toCents(total);
   const baseCents = Math.trunc(totalCents / parts);
   const remainder = totalCents - baseCents * parts;
-  // Make split deterministic and cent-accurate to avoid drift during high-volume splits.
+  // 按“分”为最小单位做均摊，确保大批量拆分时总额不漂移、可重复计算。
   const values = Array.from({ length: parts }, (_v, index) => fromCents(index < remainder ? baseCents + 1 : baseCents));
   return values;
 }
 
 /**
- * Build a deterministic split plan for an overweight / over-volume waybill draft.
- * @param draft original waybill draft submitted by the user.
- * @returns split plan containing child drafts that each satisfy both capacity constraints.
+ * 生成超载/超体积运单的自动拆分方案。
+ * 功能：根据车辆双约束（重量 + 体积）计算最小可行拆分份数，并产出每个子单草稿。
+ * @param draft 原始运单草稿（包含重量、体积、附加费用等字段）。
+ * @returns 拆分结果；当无需拆分时 childDrafts 仅包含原草稿。
  */
 export function buildSplitPlan(draft: WaybillDraft): WaybillSplitPlan {
-  // Split planning is deterministic, so retries with the same draft are stable.
+  // 拆分计算保持确定性：同一草稿重复请求必须得到同一拆分结果。
   const vehicle = vehicles.find((item) => item.id === draft.vehicleId);
   if (!vehicle) {
     throw new Error('Vehicle not found.');
@@ -84,7 +85,7 @@ export function buildSplitPlan(draft: WaybillDraft): WaybillSplitPlan {
 
   let parts = validation.suggestedSplitCount;
 
-  // Keep increasing split parts until each child satisfies both weight and volume constraints.
+  // 逐步增加拆分份数，直到每个子单同时满足重量与体积约束。
   while (parts <= 1000) {
     const weightParts = splitAmount(draft.weightKg, parts);
     const volumeParts = splitAmount(draft.volumeM3, parts);
@@ -123,10 +124,11 @@ export function buildSplitPlan(draft: WaybillDraft): WaybillSplitPlan {
 }
 
 /**
- * Find the pricing rule that matches shipper, vehicle type, and mileage interval.
- * @param draft waybill draft to price.
- * @param vehicle resolved vehicle archive used to determine truck type.
- * @returns one matched pricing rule.
+ * 查找匹配当前运单的运费规则。
+ * 功能：按托运方、车型、里程区间定位唯一生效定价规则。
+ * @param draft 待计价运单草稿。
+ * @param vehicle 已解析车辆档案（用于确定 truckType）。
+ * @returns 命中的定价规则。
  */
 function findRule(draft: WaybillDraft, vehicle: VehicleProfile): PricingRule {
   const rule = pricingRules.find(
@@ -279,27 +281,29 @@ function shouldApplyAdjustmentRule(rule: SettlementAdjustmentRule, draft: Waybil
 }
 
 /**
- * Resolve target shard table by waybill number tail hash and month.
- * @param waybillNo waybill business number used for hash distribution.
- * @param createdAt waybill creation time used to build yyyyMM shard prefix.
- * @param shardCount number of physical shards for the month.
- * @returns physical table name such as waybill_202607_1.
+ * 计算运单应落入的分片表名。
+ * 功能：使用“创建月份 + 运单号尾字符哈希”做稳定路由。
+ * @param waybillNo 运单号，用于哈希分桶。
+ * @param createdAt 创建时间，用于生成 yyyyMM 月分片前缀。
+ * @param shardCount 当月物理分片数。
+ * @returns 物理分表名，例如 waybill_202607_1。
  */
 export function resolveShardTable(waybillNo: string, createdAt: Date, shardCount = 4): string {
   if (shardCount <= 0) {
     throw new Error('Shard count must be greater than zero.');
   }
   const month = `${createdAt.getFullYear()}${String(createdAt.getMonth() + 1).padStart(2, '0')}`;
-  // Keep routing deterministic: same waybillNo always lands on the same shard under one shardCount.
+  // 路由必须可预测：同一 shardCount 下，同一运单号始终命中同一分片。
   const tail = waybillNo.charCodeAt(waybillNo.length - 1) % shardCount;
   return `waybill_${month}_${tail}`;
 }
 
 /**
- * Validate draft weight and volume against the assigned vehicle capacity.
- * @param draft waybill draft that may need blocking or auto-splitting.
- * @param vehicle assigned vehicle archive record.
- * @returns validation result including exact overweight / over-volume numbers.
+ * 校验运单是否超出车辆双约束。
+ * 功能：计算超重/超体积具体数值，并给出建议拆分份数。
+ * @param draft 待校验运单草稿。
+ * @param vehicle 承运车辆档案。
+ * @returns 校验结果（含 valid、overweightKg、overVolumeM3、suggestedSplitCount）。
  */
 export function validateCapacity(draft: WaybillDraft, vehicle: VehicleProfile): CapacityValidationResult {
   const overweightKg = Math.max(0, draft.weightKg - vehicle.maxWeightKg);
@@ -317,12 +321,13 @@ export function validateCapacity(draft: WaybillDraft, vehicle: VehicleProfile): 
 }
 
 /**
- * Calculate fee breakdown and total amount for one waybill draft.
- * @param draft waybill draft containing mileage, extra fees, subsidy and deduction.
- * @returns fee components, total amount and routed shard table snapshot.
+ * 计算运单费用明细与总额。
+ * 功能：按基础运价规则 + 结算调整规则，输出可追溯的费用项列表。
+ * @param draft 运单草稿（里程、装卸附加费、补贴、扣款等）。
+ * @returns 费用明细、总金额，以及路由分表快照。
  */
 export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
-  // Keep pricing validation in one place so quote/create/share identical behavior.
+  // 计价前置校验集中在此，确保报价/建单/分单路径行为一致。
   if (!draft.goodsName.trim()) {
     throw new Error('Empty waybill is not allowed.');
   }
@@ -344,12 +349,12 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
   }
 
   const rule = findRule(draft, vehicle);
-  // Positive fee items are accumulated independently so each formula remains traceable in settlement detail.
+  // 正向费用独立成项，保证结算明细可追溯（每项都有明确公式）。
   const lineHaul = roundCurrency(draft.mileageKm * rule.unitPricePerKm);
   const loading = roundCurrency(rule.loadingFee + draft.extraLoadingFee);
   const insurance = roundCurrency(lineHaul * rule.insuranceRate);
   const subsidy = roundCurrency(draft.subsidy);
-  // DEDUCTION is stored as negative to make total aggregation and ledger math explicit.
+  // 扣款统一转为负数，后续聚合总额时无需再做额外减法判断。
   const deduction = roundCurrency(draft.deduction * -1);
 
   const fees: FeeComponent[] = [
@@ -385,14 +390,14 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
     },
   ];
 
-  // Settlement adjustments are config-driven so fee tweaks do not require core flow rewrites.
+  // 结算调整走配置驱动，支持快速微调而不改核心计价流程。
   for (const item of settlementAdjustmentRules) {
     if (!shouldApplyAdjustmentRule(item, draft, vehicle)) {
       continue;
     }
     const amount = resolveAdjustmentAmount(item, lineHaul);
     if (item.category === 'LOADING') {
-      // LOADING adjustments are positive additions, even when they are computed as a line-haul rate.
+      // 装卸类调整始终为正向加项，即使按干线比例计算。
       fees.push({
         type: 'LOADING',
         label: `${item.label} / ${item.code}`,
@@ -402,7 +407,7 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
       continue;
     }
 
-    // DEDUCTION adjustments are converted to negative amounts so downstream total aggregation stays arithmetic.
+    // 扣款类调整统一负号化，确保下游汇总逻辑只做“同口径求和”。
     fees.push({
       type: 'DEDUCTION',
       label: `${item.label} / ${item.code}`,
@@ -422,13 +427,14 @@ export function calculateFees(draft: WaybillDraft): FeeCalculationResult {
 }
 
 /**
- * Create one waybill in memory mode while preserving the same idempotent semantics as DB mode.
- * @param draft validated waybill draft.
- * @param idempotencyKey optional request-level idempotency key.
- * @returns created or previously created waybill record.
+ * 在内存模式创建运单（与数据库模式保持同等幂等语义）。
+ * 功能：支持按请求幂等键去重，避免重复创建。
+ * @param draft 已通过校验的运单草稿。
+ * @param idempotencyKey 可选请求级幂等键。
+ * @returns 新建记录，或历史已创建记录。
  */
 export function createWaybill(draft: WaybillDraft, idempotencyKey?: string): WaybillRecord {
-  // The memory path preserves idempotent semantics as fallback when DB is unavailable.
+  // 数据库不可用时，内存路径也必须维持相同的幂等拦截行为。
   if (idempotencyKey && idempotencyStore.has(idempotencyKey)) {
     const existingId = idempotencyStore.get(idempotencyKey)!;
     const existing = waybills.find((item) => item.id === existingId);
@@ -460,18 +466,19 @@ export function createWaybill(draft: WaybillDraft, idempotencyKey?: string): Way
 }
 
 /**
- * Transition one in-memory waybill through SIGN / UPLOAD_POD with action-level idempotent interception.
- * @param waybillId target waybill business id.
- * @param action transition action, limited to SIGN or UPLOAD_POD.
- * @param idempotencyKey optional idempotency key; falls back to waybillId + action.
- * @returns latest waybill snapshot after transition or idempotent replay.
+ * 推进运单状态流转（内存模式）。
+ * 功能：处理 PICKUP/START_TRANSIT/SIGN/UPLOAD_POD，并在动作级别做幂等拦截。
+ * @param waybillId 运单业务ID。
+ * @param action 流转动作。
+ * @param idempotencyKey 可选幂等键；缺省回退为 waybillId:action。
+ * @returns 最新运单快照；若命中幂等则返回当前状态快照。
  */
 export function transitionWaybill(
   waybillId: string,
   action: 'PICKUP' | 'START_TRANSIT' | 'SIGN' | 'UPLOAD_POD',
   idempotencyKey?: string,
 ): WaybillRecord {
-  // Status transition is guarded by both action-level and final-status idempotency.
+  // 流转需同时受“请求幂等键”和“终态幂等”双重保护。
   if (!WAYBILL_ACTIONS.has(action)) {
     throw new Error('Unsupported action.');
   }
@@ -483,7 +490,7 @@ export function transitionWaybill(
 
   const actionKey = idempotencyKey ?? `${waybillId}:${action}`;
   if (idempotencyStore.has(actionKey)) {
-    // Same action key means this transition was already applied or acknowledged before.
+    // 同一动作幂等键命中，说明该动作已被处理或已确认，直接返回当前快照。
     return waybill;
   }
 
@@ -494,7 +501,7 @@ export function transitionWaybill(
       || waybill.status === 'SIGNED'
       || waybill.status === 'POD_UPLOADED'
     ) {
-      // PICKUP is idempotent once the waybill is already at or beyond PICKED_UP.
+      // 已经处于“已提货及之后状态”时，再次提货按幂等成功处理。
       return waybill;
     }
     if (waybill.status !== 'ASSIGNED') {
@@ -505,7 +512,7 @@ export function transitionWaybill(
 
   if (action === 'START_TRANSIT') {
     if (waybill.status === 'IN_TRANSIT' || waybill.status === 'SIGNED' || waybill.status === 'POD_UPLOADED') {
-      // START_TRANSIT is idempotent once the waybill is already at or beyond IN_TRANSIT.
+      // 已经处于“运输中及之后状态”时，再次发车按幂等成功处理。
       return waybill;
     }
     if (waybill.status !== 'PICKED_UP') {
@@ -516,7 +523,7 @@ export function transitionWaybill(
 
   if (action === 'SIGN') {
     if (waybill.status === 'SIGNED' || waybill.status === 'POD_UPLOADED') {
-      // Once a waybill is signed or fully completed, repeated sign requests must be ignored.
+      // 运单签收后再次签收不能重复写入时间戳，直接返回当前状态。
       return waybill;
     }
     waybill.status = 'SIGNED';
@@ -525,7 +532,7 @@ export function transitionWaybill(
 
   if (action === 'UPLOAD_POD') {
     if (waybill.podUploaded) {
-      // POD upload is terminal; duplicate uploads return the current state without writing again.
+      // 回单上传是终态动作：重复上传不再改写状态与时间字段。
       return waybill;
     }
     if (waybill.status !== 'SIGNED' && waybill.status !== 'POD_UPLOADED') {

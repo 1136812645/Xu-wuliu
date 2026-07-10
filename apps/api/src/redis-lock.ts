@@ -49,24 +49,26 @@ async function getRedisClient(): Promise<Redis> {
 }
 
 /**
- * Attempt one Redis NX/PX lock acquisition round.
- * @param key business lock key.
- * @param token unique owner token used for safe release.
- * @param ttlMs lock expiration in milliseconds.
- * @returns true when the caller won the lock.
+ * 执行一次 Redis 分布式锁抢占。
+ * 功能：基于 SET NX PX 原子语义尝试成为锁持有者。
+ * @param key 业务锁键。
+ * @param token 锁持有者唯一标识（用于安全释放）。
+ * @param ttlMs 锁过期时间（毫秒）。
+ * @returns true 表示本次抢锁成功。
  */
 async function tryAcquireLock(key: string, token: string, ttlMs: number): Promise<boolean> {
   const client = await getRedisClient();
-  // NX + PX guarantees only one winner and avoids dead locks by ttl expiration.
+  // NX 保证同一时刻只有一个请求成功，PX 防止异常中断导致死锁长期占用。
   const result = await client.set(key, token, 'PX', ttlMs, 'NX');
   return result === 'OK';
 }
 
 /**
- * Acquire distributed lock with bounded wait and safe release.
- * @param key lock key, usually composed by business dimension (e.g. shipper + vehicle).
- * @param options ttl/wait/retry controls for contention handling.
- * @returns lock handle with acquired flag and release function.
+ * 获取分布式锁（带等待上限与安全释放）。
+ * 功能：在限定时间内重试抢锁，成功后返回可安全释放的锁句柄。
+ * @param key 锁键（通常按业务维度组合，例如 shipper + vehicle）。
+ * @param options 锁超时、等待窗口、重试间隔配置。
+ * @returns 含 acquired 标记与 release 方法的锁对象。
  */
 export async function acquireDistributedLock(
   key: string,
@@ -87,7 +89,7 @@ export async function acquireDistributedLock(
         release: async () => {
           try {
             const client = await getRedisClient();
-            // Compare-and-delete by token ensures one request cannot release another request's lock by mistake.
+            // 仅允许“持锁 token”删除锁，防止误删其他请求持有的锁。
             await client.eval(RELEASE_LOCK_SCRIPT, 1, key, token);
           } catch (error) {
             if (error instanceof Error) {
@@ -98,7 +100,7 @@ export async function acquireDistributedLock(
       };
     }
 
-    // Bounded retry avoids one waiting request spinning forever when another request holds the same vehicle lock.
+    // 有界重试避免请求无限自旋，降低并发争抢时的 CPU 空转。
     await new Promise((resolve) => setTimeout(resolve, retryIntervalMs));
   }
 

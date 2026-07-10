@@ -130,10 +130,11 @@ async function ensureConnected(): Promise<boolean> {
 }
 
 /**
- * Persist or update outbox event status for reliable publish replay.
- * @param event business event payload.
- * @param publishStatus NEW/FAILED/PUBLISHED state in outbox table.
- * @param retryCount publish retry times.
+ * 持久化（或更新）Outbox 事件状态，支撑可靠发布与补偿重放。
+ * 功能：在发布前后记录 NEW/FAILED/PUBLISHED，保证 MQ 不可用时仍可追溯与补发。
+ * @param event 业务事件载荷。
+ * @param publishStatus outbox_event 表中的发布状态。
+ * @param retryCount 当前发布重试次数。
  */
 async function upsertOutboxEvent(event: WaybillEvent, publishStatus: 'NEW' | 'FAILED' | 'PUBLISHED', retryCount: number): Promise<void> {
   if (!isDbEnabled()) {
@@ -155,10 +156,11 @@ async function upsertOutboxEvent(event: WaybillEvent, publishStatus: 'NEW' | 'FA
 }
 
 /**
- * Update one inbox event consume status after first-seen detection.
- * @param eventId unique MQ event id.
- * @param consumeStatus target inbox state.
- * @param retryCount current retry count to persist for replay / DLQ observation.
+ * 更新 InBox 事件消费状态。
+ * 功能：记录消息已消费/重试中/死信，形成重复消费与故障排查证据链。
+ * @param eventId MQ 事件唯一ID。
+ * @param consumeStatus 目标消费状态。
+ * @param retryCount 当前重试次数（用于重放与死信观察）。
  */
 async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'CONSUMED' | 'DEAD_LETTER', retryCount: number): Promise<void> {
   if (!isDbEnabled()) {
@@ -174,10 +176,11 @@ async function updateInboxStatus(eventId: string, consumeStatus: 'RETRYING' | 'C
 }
 
 /**
- * Try to insert one inbox row as consumer dedupe guard.
- * @param event parsed waybill event.
- * @param payload raw json payload string.
- * @returns true when event is first seen, false when duplicated.
+ * 尝试写入一条 InBox 记录，作为消费端去重门闩。
+ * 功能：数据库模式依赖唯一键去重；内存模式使用 processedEventIds 去重。
+ * @param event 已解析事件。
+ * @param payload 原始 JSON 文本。
+ * @returns true 表示首次消费；false 表示重复消费。
  */
 async function tryRecordInboxEvent(event: WaybillEvent, payload: string): Promise<boolean> {
   if (!isDbEnabled()) {
@@ -290,9 +293,9 @@ async function routeToRetry(message: ConsumeMessage, retryCount: number): Promis
 }
 
 /**
- * Parse one RabbitMQ message into a typed waybill event.
- * @param message raw consume message from the event queue.
- * @returns parsed business event.
+ * 解析 RabbitMQ 消息为运单业务事件。
+ * @param message 事件队列原始消息。
+ * @returns 结构化业务事件对象。
  */
 function parseEvent(message: ConsumeMessage): WaybillEvent {
   const content = message.content.toString('utf-8');
@@ -300,8 +303,9 @@ function parseEvent(message: ConsumeMessage): WaybillEvent {
 }
 
 /**
- * Consume one message with dedupe, retry and dead-letter handling.
- * @param message rabbit consume message; null indicates consumer cancelled.
+ * 消费单条消息（含去重、重试、死信策略）。
+ * 功能：先做重复消费拦截，再做业务消费；异常时按预算重试，超限后转死信。
+ * @param message RabbitMQ 消费消息；null 代表消费者被取消。
  */
 async function handleMessage(message: ConsumeMessage | null): Promise<void> {
   if (!message || !consumeChannel) {
@@ -317,7 +321,7 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
 
     const firstSeen = await tryRecordInboxEvent(event, payload);
     if (!firstSeen) {
-      // Duplicate consumption is acknowledged and skipped to prevent repeated business effects.
+      // 重复消息直接 ACK 丢弃，避免二次触发业务副作用（重复签收/重复回单等）。
       stats.duplicated += 1;
       consumeChannel.ack(message);
       return;
@@ -337,7 +341,7 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
     })();
 
     if (retryCount >= 3) {
-      // Retry budget exhausted, message will be routed to DLQ for manual replay.
+      // 达到最大重试次数后转入死信，等待人工排查与补偿。
       stats.deadLettered += 1;
       if (parsed?.eventId) {
         await updateInboxStatus(parsed.eventId, 'DEAD_LETTER', retryCount);
@@ -347,7 +351,7 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
     }
 
     try {
-      // Retry flow republishes first, then ACKs the original message, so we do not lose a failed payload in-flight.
+      // 关键顺序：先投递重试队列并确认，再 ACK 原消息，避免“原消息已确认但重试消息未落盘”。
       await routeToRetry(message, retryCount + 1);
       if (parsed?.eventId) {
         await updateInboxStatus(parsed.eventId, 'RETRYING', retryCount + 1);
@@ -368,9 +372,10 @@ async function handleMessage(message: ConsumeMessage | null): Promise<void> {
 }
 
 /**
- * Publish one waybill event with outbox fallback when MQ is unavailable.
- * @param event waybill business event.
- * @returns persistedToOutbox=true means event was buffered for retry.
+ * 发布运单事件（带 Outbox 兜底）。
+ * 功能：MQ 可用时直发；不可用或发送失败时落 Outbox，后续统一补发。
+ * @param event 运单业务事件。
+ * @returns persistedToOutbox=true 表示已进入待补发缓冲。
  */
 export async function publishWaybillEvent(event: WaybillEvent): Promise<{ persistedToOutbox: boolean }> {
   if (isDbEnabled()) {
@@ -401,8 +406,9 @@ export async function publishWaybillEvent(event: WaybillEvent): Promise<{ persis
 }
 
 /**
- * Flush in-memory and DB outbox events to MQ.
- * @returns sent count and remaining buffered count.
+ * 主动冲刷内存/数据库 Outbox 事件到 MQ。
+ * 功能：用于故障恢复后补发，减少事件长期滞留。
+ * @returns sent 已发送条数，remaining 剩余缓冲条数。
  */
 export async function flushOutbox(): Promise<{ sent: number; remaining: number }> {
   const connected = await ensureConnected();
@@ -431,10 +437,10 @@ export async function flushOutbox(): Promise<{ sent: number; remaining: number }
       sent += 1;
     } catch {
       try {
-        // DB outbox rows remain queryable for later replay even when this flush round still cannot send them.
+        // 本轮补发失败仅增加失败计数，不删除记录，确保后续仍可继续重放。
         await upsertOutboxEvent(event, 'FAILED', Number(row.retry_count ?? 0) + 1);
       } catch {
-        // Keep best-effort semantics. Failures remain queryable in outbox_event.
+        // 保持尽力而为语义：即使更新失败，也不阻断本次冲刷流程。
       }
     }
   }
@@ -458,7 +464,7 @@ export async function startWaybillConsumer(): Promise<void> {
   }
 
   consumerStarted = true;
-  // Prefetch limits concurrent in-flight messages so retry / dedupe pressure stays bounded per consumer instance.
+  // 限制单消费者并发在途消息，避免高峰期重试风暴放大。
   await consumeChannel.prefetch(20);
   await consumeChannel.consume(EVENT_QUEUE, (message: ConsumeMessage | null) => {
     void handleMessage(message);

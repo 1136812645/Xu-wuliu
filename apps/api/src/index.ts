@@ -1473,8 +1473,8 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
 
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
-    // Request-key idempotency is the first guard: identical retries return the stored
-    // snapshot immediately, without re-entering DB writes, MQ publish, or status changes.
+    // 请求级幂等第一道防线：同一幂等键直接返回历史快照，
+    // 不再重复进入 DB 写入、MQ 发布和状态流转。
     return res.status(200).json(idemSnapshot);
   }
 
@@ -1484,7 +1484,7 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
   }
 
   try {
-    // Lock + occupation check together prevent concurrent duplicate occupation of one vehicle.
+    // 分布式锁 + 运力占用校验双保险，避免并发下同车被重复占用开单。
     const vehicleLockKey = `lock:create-waybill:${parsed.data.shipperId}:${parsed.data.vehicleId}`;
     const lock = await acquireDistributedLock(vehicleLockKey, {
       ttlMs: 8000,
@@ -1499,8 +1499,7 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
     }
 
     try {
-      // Lock serializes current contenders; occupation check confirms whether the vehicle
-      // is already held by an active waybill from an earlier successful request.
+      // 锁只负责串行化当前竞争者；占用校验负责识别“历史成功请求已占车”。
       const occupied = isDbEnabled()
         ? await hasActiveWaybillForVehicleInDb(parsed.data.vehicleId)
         : hasActiveWaybillForVehicleInMemory(parsed.data.vehicleId);
@@ -1517,8 +1516,7 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
       }
 
       const splitPlan = buildSplitPlan(parsed.data);
-      // Child drafts are revalidated before persistence so a bad split plan cannot leak
-      // an over-capacity child order into the database.
+      // 入库前再次逐子单校验，防止异常拆分方案把超载子单落库。
       const invalidChild = splitPlan.childDrafts.find((child) => !validateCapacity(child, vehicle).valid);
       if (invalidChild) {
         const invalidCapacity = validateCapacity(invalidChild, vehicle);
@@ -1543,8 +1541,8 @@ app.post('/api/waybills', requirePermission('waybill:create'), async (req, res) 
           : createWaybill(draft, key);
 
         if (!existedBeforeCreate) {
-          // CREATE events are only emitted for the first successful create path.
-          // Replayed idempotent requests must not fan out duplicate MQ events.
+          // CREATE 事件仅在首次成功建单时发出；
+          // 幂等重放请求不得再次扇出 MQ，避免重复消费副作用。
           const mqResult = await publishWaybillEvent(
             buildWaybillEvent({
               waybillId: waybill.id,
@@ -1611,7 +1609,7 @@ app.post('/api/waybills/:id/sign', requirePermission('waybill:transition'), asyn
     return;
   }
 
-  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
+  // 快速幂等拦截：命中历史快照时直接返回，不再推进状态。
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
     return res.status(200).json({
@@ -1637,6 +1635,7 @@ app.post('/api/waybills/:id/sign', requirePermission('waybill:transition'), asyn
         };
 
     const waybill = transitionResult.waybill;
+    // 仅当“此前未到目标状态”且“本次未被幂等拦截”时，才允许发布 MQ 事件。
     const shouldPublish = !wasSignedOrDone && !transitionResult.idempotentBlocked;
     if (shouldPublish) {
       const mqResult = await publishWaybillEvent(
@@ -1690,11 +1689,10 @@ app.post('/api/waybills/:id/upload-pod', requirePermission('pod:upload'), async 
     return;
   }
 
-  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
+  // 快速幂等拦截：命中历史快照时直接返回，不再推进状态。
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
-    // Reusing the same upload request key returns the prior result snapshot and avoids
-    // touching state timestamps or publishing the same UPLOAD_POD event again.
+    // 同一上传幂等键重复请求直接回放结果，避免重复改写时间戳和重复发 UPLOAD_POD 事件。
     return res.status(200).json({
       idempotentBlocked: true,
       reason: 'IDEMPOTENCY_KEY_HIT',
@@ -1718,6 +1716,7 @@ app.post('/api/waybills/:id/upload-pod', requirePermission('pod:upload'), async 
         };
 
     const waybill = transitionResult.waybill;
+    // POD 属于终态动作，重复请求必须静默幂等返回，不能重复发消息。
     const shouldPublish = !wasPodUploaded && !transitionResult.idempotentBlocked;
     if (shouldPublish) {
       const mqResult = await publishWaybillEvent(
@@ -1941,7 +1940,7 @@ app.post('/api/waybills/:id/pickup', requirePermission('waybill:transition'), as
     return;
   }
 
-  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
+  // 快速幂等拦截：命中历史快照时直接返回，不再推进状态。
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
     return res.status(200).json({
@@ -1969,6 +1968,7 @@ app.post('/api/waybills/:id/pickup', requirePermission('waybill:transition'), as
         };
 
     const waybill = transitionResult.waybill;
+    // PICKUP 消息只允许首次有效流转时发布，避免重复消费导致下游误判。
     const shouldPublish = !wasPickedUpOrBeyond && !transitionResult.idempotentBlocked;
     if (shouldPublish) {
       const mqResult = await publishWaybillEvent(
@@ -2022,7 +2022,7 @@ app.post('/api/waybills/:id/start-transit', requirePermission('waybill:transitio
     return;
   }
 
-  // Fast-path idempotency interception: return prior snapshot directly when key already exists.
+  // 快速幂等拦截：命中历史快照时直接返回，不再推进状态。
   const idemSnapshot = await getIdempotencySnapshot<unknown>(idempotencyKey);
   if (idemSnapshot) {
     return res.status(200).json({
@@ -2050,6 +2050,7 @@ app.post('/api/waybills/:id/start-transit', requirePermission('waybill:transitio
         };
 
     const waybill = transitionResult.waybill;
+    // START_TRANSIT 与其他状态动作一致，仅首次有效流转发布 MQ。
     const shouldPublish = !wasInTransitOrBeyond && !transitionResult.idempotentBlocked;
     if (shouldPublish) {
       const mqResult = await publishWaybillEvent(

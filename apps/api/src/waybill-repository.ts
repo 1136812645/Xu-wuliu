@@ -32,8 +32,9 @@ export interface WaybillBatchImportResult {
 }
 
 /**
- * Sync DB-backed settlement rules into the in-process calculation engine before DB create/import pricing.
- * @returns resolves when pricing and adjustment rules are refreshed from DB.
+ * 将数据库中的结算规则同步到进程内计价引擎。
+ * 功能：建单/批量导入前刷新定价与调整规则，避免使用陈旧规则计费。
+ * @returns 规则同步完成后返回。
  */
 async function syncSettlementRulesForDbFeeCalculation(): Promise<void> {
   const now = Date.now();
@@ -143,11 +144,12 @@ function monthFromDate(date: Date): string {
 }
 
 /**
- * Route one waybill number to a physical shard table.
- * @param waybillNo waybill business number.
- * @param now current create time.
- * @param shardCount route config shard count.
- * @returns safe shard table name.
+ * 将运单号路由到具体物理分表。
+ * 功能：组合“月份 + 哈希分片”，并通过表名白名单校验避免 SQL 注入。
+ * @param waybillNo 运单号。
+ * @param now 当前创建时间。
+ * @param shardCount 当前配置分片数。
+ * @returns 安全可用的分表名。
  */
 function routeTable(waybillNo: string, now: Date, shardCount: number): string {
   return safeShardTable(resolveShardTable(waybillNo, now, shardCount));
@@ -169,10 +171,11 @@ function pushBoundedError(target: string[], message: string): void {
 }
 
 /**
- * Batch insert waybill base rows into one physical shard table.
- * @param conn active transactional DB connection.
- * @param table concrete shard table name.
- * @param rows prepared rows already routed to the same shard.
+ * 批量写入运单主表数据（单分表）。
+ * 功能：将已路由到同一分表的记录合并成一次批量 INSERT，提升吞吐。
+ * @param conn 当前事务连接。
+ * @param table 目标物理分表名。
+ * @param rows 已按分表聚合的预处理行。
  */
 async function insertWaybillRowsBatch(
   conn: PoolConnection,
@@ -210,9 +213,10 @@ async function insertWaybillRowsBatch(
 }
 
 /**
- * Batch insert fee detail rows for imported or created waybills.
- * @param conn active transactional DB connection.
- * @param rows fee detail payload grouped by waybill number.
+ * 批量写入运费明细。
+ * 功能：按运单号展开费用项后分批插入，避免单 SQL 过长。
+ * @param conn 当前事务连接。
+ * @param rows 运单号与费用明细集合。
  */
 async function insertFeeRowsBatch(
   conn: PoolConnection,
@@ -243,9 +247,10 @@ async function insertFeeRowsBatch(
 }
 
 /**
- * Batch insert operation-log rows so CREATE requests keep DB-level idempotency evidence.
- * @param conn active transactional DB connection.
- * @param rows waybill number and idempotency key pairs.
+ * 批量写入操作日志（CREATE）。
+ * 功能：保留数据库级幂等证据，支持重复请求回放与审计。
+ * @param conn 当前事务连接。
+ * @param rows 运单号与幂等键映射。
  */
 async function insertOperationRowsBatch(
   conn: PoolConnection,
@@ -269,9 +274,10 @@ async function insertOperationRowsBatch(
 }
 
 /**
- * Find which CREATE idempotency keys already exist so batch import can treat them as successful replays.
- * @param keys candidate idempotency keys from the incoming import chunk.
- * @returns set of keys that are already present in waybill_operation_log.
+ * 查询批量导入中已存在的 CREATE 幂等键。
+ * 功能：命中历史幂等键的行按“成功重放”处理，不计入失败。
+ * @param keys 当前导入批次待检查的幂等键。
+ * @returns 已存在于 waybill_operation_log 的幂等键集合。
  */
 async function findExistingCreateIdempotencyKeys(keys: string[]): Promise<Set<string>> {
   if (keys.length === 0) {
@@ -333,7 +339,7 @@ export async function importWaybillChunkInDb(
   for (let i = 0; i < rowInputs.length; i += 1) {
     const { row, idempotencyKey } = rowInputs[i];
     if (existingIdempotencyKeys.has(idempotencyKey)) {
-      // Re-importing the same row is counted as success so one duplicate does not fail the entire chunk.
+      // 同一幂等键重复导入视为成功重放，避免单条重复拖垮整批。
       idempotentHits += 1;
       continue;
     }
@@ -368,7 +374,7 @@ export async function importWaybillChunkInDb(
     try {
       const byTable = new Map<string, Array<{ waybillNo: string; draft: WaybillDraft; totalAmount: number; now: Date }>>();
       for (const row of prepared) {
-        // Group by physical shard first so each INSERT statement stays table-local and efficient.
+        // 先按物理分表分组，确保每条 INSERT 仅作用单表，降低锁竞争与 SQL 复杂度。
         const list = byTable.get(row.table) ?? [];
         list.push({
           waybillNo: row.waybillNo,
@@ -485,15 +491,16 @@ async function loadWaybillByNo(waybillNo: string, tableHints: string[]): Promise
 
 async function listShardTablesByMonth(month: string): Promise<string[]> {
   const shardCount = await getShardCount(month);
-  // Expand to concrete physical tables for cross-shard reads in current month.
+  // 当前月份读场景需跨分片扫描时，先展开为具体物理表清单。
   return Array.from({ length: shardCount }, (_, i) => safeShardTable(`waybill_${month}_${i}`));
 }
 
 /**
- * Create one waybill in DB with transactional idempotency and fee snapshots.
- * @param draft waybill draft payload.
- * @param idempotencyKey optional client idempotency key.
- * @returns created or previously created waybill record.
+ * 数据库模式创建运单（事务 + 幂等 + 费用快照）。
+ * 功能：在一个事务内写入主表、费用明细、操作日志，保证原子性。
+ * @param draft 运单草稿。
+ * @param idempotencyKey 可选客户端幂等键。
+ * @returns 新建记录，或命中幂等后的历史记录。
  */
 export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: string): Promise<WaybillRecord> {
   await syncSettlementRulesForDbFeeCalculation();
@@ -506,7 +513,7 @@ export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: st
   const dedupeKey = idempotencyKey ?? `${waybillNo}:${CREATE_OPERATION}`;
 
   return withDbConnection(async (conn) => {
-    // Create flow is wrapped in one transaction to keep waybill/fees/operation-log atomic.
+    // 建单全链路放进同一事务，防止“主单成功但费用/日志缺失”的不一致。
     await conn.beginTransaction();
     try {
       if (idempotencyKey) {
@@ -519,7 +526,7 @@ export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: st
         );
 
         if (idemRows.length > 0) {
-          // If idempotency key already exists, return prior result instead of inserting duplicates.
+          // 命中幂等键时直接回放历史结果，不再重复插入。
           await conn.rollback();
           const hitNo = String(idemRows[0].waybill_no);
           const tables = await listShardTablesByMonth(month);
@@ -586,9 +593,10 @@ export async function createWaybillInDb(draft: WaybillDraft, idempotencyKey?: st
 }
 
 /**
- * List recent waybills across all monthly shards.
- * @param limit max rows to return.
- * @returns merged recent waybill records sorted by created_at desc.
+ * 查询最近运单（跨当月全部分片）。
+ * 功能：UNION ALL 合并分片结果，并按创建时间倒序返回。
+ * @param limit 返回上限。
+ * @returns 合并后的运单记录列表。
  */
 export async function listRecentWaybillsFromDb(limit = 50): Promise<WaybillRecord[]> {
   const month = monthFromDate(new Date());
@@ -619,11 +627,12 @@ export async function listRecentWaybillsFromDb(limit = 50): Promise<WaybillRecor
 }
 
 /**
- * Transition waybill status in DB with operation-log idempotency.
- * @param waybillId waybill business id.
- * @param action SIGN or UPLOAD_POD.
- * @param idempotencyKey optional client idempotency key.
- * @returns latest waybill record.
+ * 在数据库模式推进运单状态。
+ * 功能：以操作日志幂等为核心，保证重复请求不重复写状态。
+ * @param waybillId 运单业务ID。
+ * @param action 状态动作（PICKUP/START_TRANSIT/SIGN/UPLOAD_POD）。
+ * @param idempotencyKey 可选客户端幂等键。
+ * @returns 流转后的运单结果及是否被幂等拦截。
  */
 export async function transitionWaybillInDb(
   waybillId: string,
@@ -640,7 +649,7 @@ export async function transitionWaybillInDb(
   const operationKey = idempotencyKey ?? `${waybillId}:${action}`;
 
   return withDbConnection(async (conn) => {
-    // Transition flow records an idempotent operation log before returning final state.
+    // 状态流转统一写操作日志，确保并发下也有可追溯幂等证据。
     await conn.beginTransaction();
     try {
       const [idemRows] = await conn.query<RowDataPacket[]>(
@@ -652,6 +661,7 @@ export async function transitionWaybillInDb(
       );
 
       if (idemRows.length > 0) {
+        // 同幂等键重复命中，直接返回当前状态快照，不重复推进状态。
         await conn.rollback();
         const existing = await loadWaybillByNo(waybillId, tables);
         if (!existing) {
@@ -667,6 +677,7 @@ export async function transitionWaybillInDb(
       let blockedReason: TransitionBlockedReason | undefined;
       if (action === 'PICKUP') {
         if (hit.status === 'PICKED_UP' || hit.status === 'IN_TRANSIT' || hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
+          // 已处于提货后状态，PICKUP 再次执行按幂等拦截处理。
           blockedReason = 'ALREADY_PICKED_UP';
         } else if (hit.status !== 'ASSIGNED') {
           throw new Error('Waybill must be assigned before pickup.');
@@ -682,6 +693,7 @@ export async function transitionWaybillInDb(
 
       if (action === 'START_TRANSIT') {
         if (hit.status === 'IN_TRANSIT' || hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
+          // 已处于运输中及后续状态，再次发车应直接返回当前状态。
           blockedReason = 'ALREADY_IN_TRANSIT';
         } else if (hit.status !== 'PICKED_UP') {
           throw new Error('Waybill must be picked up before transit.');
@@ -697,6 +709,7 @@ export async function transitionWaybillInDb(
 
       if (action === 'SIGN') {
         if (hit.status === 'SIGNED' || hit.status === 'POD_UPLOADED') {
+          // 签收属于关键终态，重复签收不应改写 signed_at。
           blockedReason = 'ALREADY_SIGNED';
         } else {
           await conn.query(
@@ -710,6 +723,7 @@ export async function transitionWaybillInDb(
 
       if (action === 'UPLOAD_POD') {
         if (hit.status === 'POD_UPLOADED') {
+          // 回单已上传时重复请求按幂等成功返回。
           blockedReason = 'ALREADY_POD_UPLOADED';
         } else if (hit.status !== 'SIGNED') {
           throw new Error('Waybill must be signed before POD upload.');
@@ -724,6 +738,7 @@ export async function transitionWaybillInDb(
       }
 
       if (blockedReason) {
+        // 业务幂等命中不入日志，直接回放当前状态，避免制造噪声操作记录。
         await conn.rollback();
         const existing = await loadWaybillByNo(waybillId, tables);
         if (!existing) {
@@ -766,6 +781,7 @@ export async function transitionWaybillInDb(
     } catch (error) {
       await conn.rollback();
       if (isDuplicateKeyError(error)) {
+        // 极端并发下若唯一键兜底触发，也按幂等命中返回，避免误报失败。
         const existing = await loadWaybillByNo(waybillId, tables);
         if (!existing) {
           throw new Error('Waybill not found after duplicate-key interception.');
